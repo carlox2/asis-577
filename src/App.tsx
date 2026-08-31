@@ -43,7 +43,7 @@ import {
   UploadIcon,
   GlobeIcon,
 } from "./components/icons";
-import { ensureAudio, sfx, setSfxMuted, SOUND_VOLUME } from "./lib/sounds";
+import { ensureAudio, sfx, setSfxMuted, SOUND_VOLUME, warmupOutput, setWarmupSinkId, setOutputSinkId } from "./lib/sounds";
 import {
   askGemini,
   blobToBase64,
@@ -52,6 +52,17 @@ import {
   SYSTEM_PROMPT,
   pickMimeType,
 } from "./lib/gemini";
+import {
+  type AudioDevice,
+  getSavedInputId,
+  getSavedOutputId,
+  onDevicesChange,
+  saveInputId,
+  saveOutputId,
+  startDeviceWatcher,
+  supportsAudioContextSinkId,
+  supportsOutputSelection,
+} from "./lib/audioDevices";
 
 /* ---------------- Tipos y utilidades ---------------- */
 
@@ -232,6 +243,10 @@ export default function App() {
   const [keySavedFlash, setKeySavedFlash] = useState(false);
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const [inputDevices, setInputDevices] = useState<AudioDevice[]>([]);
+  const [outputDevices, setOutputDevices] = useState<AudioDevice[]>([]);
+  const [selectedInputId, setSelectedInputId] = useState<string | null>(() => getSavedInputId());
+  const [selectedOutputId, setSelectedOutputId] = useState<string | null>(() => getSavedOutputId());
 
   /* ----- Referencias internas (evitan closures obsoletos) ----- */
   const phaseRef = useRef<Phase>("idle");
@@ -245,7 +260,7 @@ export default function App() {
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null); // beep cada 2 s
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null); // cronómetro
   const thinkRef = useRef<ReturnType<typeof setInterval> | null>(null); // beep "pensando"
-  const keepAliveRef = useRef<ReturnType<typeof setInterval> | null>(null); // anti-congelación de Chrome
+  const keepAliveRef = useRef<ReturnType<typeof setInterval> | null>(null); // legacy: ya no se usa, conservado por compat
   const lastTickRef = useRef(0);
   const elapsedRef = useRef(0);
   const responseRef = useRef("");
@@ -281,6 +296,71 @@ export default function App() {
     };
   }, []);
 
+  /* ----- Watcher de dispositivos de audio (entrada y salida) -----
+   * Mantiene la lista viva ante `devicechange` (BT se conecta/desconecta
+   * en caliente) y la refresca después del primer getUserMedia, porque
+   * hasta entonces Chrome entrega labels vacíos. */
+  useEffect(() => {
+    let cancelled = false;
+    void startDeviceWatcher().then((d) => {
+      if (cancelled) return;
+      setInputDevices(d.inputs);
+      setOutputDevices(d.outputs);
+    });
+    const off = onDevicesChange((d) => {
+      if (cancelled) return;
+      setInputDevices(d.inputs);
+      setOutputDevices(d.outputs);
+    });
+    return () => {
+      cancelled = true;
+      off();
+    };
+  }, []);
+
+  /* ----- Aplica el dispositivo de salida elegido al motor de audio ----- */
+  useEffect(() => {
+    // AudioContext (para los sfx)
+    setOutputSinkId(selectedOutputId);
+    // <audio> element de warm-up (para que el speechSynthesis también
+    // "vea" la salida BT antes de hablar)
+    setWarmupSinkId(selectedOutputId);
+  }, [selectedOutputId]);
+
+  /* ----- Auto-limpia la selección si el dispositivo guardado ya no
+   * existe (típico cuando se desconectan los auriculares BT). */
+  useEffect(() => {
+    if (selectedInputId && inputDevices.length > 0 && !inputDevices.some((d) => d.deviceId === selectedInputId)) {
+      setSelectedInputId(null);
+      saveInputId(null);
+    }
+  }, [inputDevices, selectedInputId]);
+  useEffect(() => {
+    if (selectedOutputId && outputDevices.length > 0 && !outputDevices.some((d) => d.deviceId === selectedOutputId)) {
+      setSelectedOutputId(null);
+      saveOutputId(null);
+    }
+  }, [outputDevices, selectedOutputId]);
+
+  /* ----- Helper: arma las constraints de getUserMedia con la
+   * selección de entrada del usuario. Si no hay selección, pide el
+   * dispositivo por defecto del sistema. */
+  const buildAudioConstraints = useCallback((): MediaStreamConstraints => {
+    if (selectedInputId) {
+      return {
+        audio: {
+          deviceId: { exact: selectedInputId },
+          // Desactivamos el procesamiento agresivo del navegador que a
+          // veces mete eco y cancela el audio del receptor USB/BT.
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false,
+        },
+      };
+    }
+    return { audio: true };
+  }, [selectedInputId]);
+
   /* ----- Silencio persistente ----- */
   useEffect(() => {
     setSfxMuted(muted);
@@ -313,12 +393,41 @@ export default function App() {
     timerRef.current = null;
   }, []);
 
-  /* ============ SÍNTESIS DE VOZ (Salida) ============ */
+  /* ============ SÍNTESIS DE VOZ (Salida) ============
+   * Decisiones de diseño (problemas reportados en S25 Ultra):
+   *
+   *  · Antes de hablar, hacemos un "warm-up" de salida: reproducimos
+   *    ~80 ms de silencio por un <audio> con setSinkId aplicado al
+   *    dispositivo de salida elegido. En Android, este truco "engancha"
+   *    el destino BT / USB-C; sin él, speechSynthesis puede salir por
+   *    el altavoz del teléfono.
+   *
+   *  · NO usamos el viejo keepAlive (pause/resume cada 8 s): ese
+   *    workaround estaba causando los cortes aleatorios en muchos
+   *    Androids — el navegador lo interpretaba como interrupción y
+   *    cancelaba el utterance a mitad de frase.
+   *
+   *  · En su lugar, un watchdog: si pasaron N segundos sin que
+   *    `synth.speaking` cambie de true→false con su `onend` correspondiente,
+   *    forzamos la finalización para que la página no quede muda.
+   * ============================================================ */
+  const speakWatchdogRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const speakLastActiveRef = useRef(0);
+  const speakStartTsRef = useRef(0);
+
+  const stopWatchdog = useCallback(() => {
+    if (speakWatchdogRef.current) {
+      clearInterval(speakWatchdogRef.current);
+      speakWatchdogRef.current = null;
+    }
+  }, []);
+
   const speak = useCallback(
     (text: string) => {
       if (!("speechSynthesis" in window)) return;
       const synth = window.speechSynthesis;
       synth.cancel(); // corta cualquier lectura previa
+      stopWatchdog();
 
       const u = new SpeechSynthesisUtterance(text);
       u.lang = "es-ES";
@@ -326,41 +435,104 @@ export default function App() {
       if (v) u.voice = v;
       u.rate = 1;
       u.pitch = 1;
+      u.volume = 1;
       userPausedRef.current = false;
       utterRef.current = u;
 
-      u.onstart = () => {
-        goPhase("speaking");
-        setStatus("Respondiendo…");
-      };
-      const finish = () => {
-        if (keepAliveRef.current) clearInterval(keepAliveRef.current);
-        keepAliveRef.current = null;
+      const finish = (reason: string) => {
+        stopWatchdog();
         // Solo vuelve a "idle" si esta utterance sigue siendo la actual
         if (utterRef.current === u && (phaseRef.current === "speaking" || phaseRef.current === "voicePaused")) {
           goPhase("idle");
           setStatus("Listo — presiona Grabar para otra pregunta");
         }
-      };
-      u.onend = finish;
-      u.onerror = (e) => {
-        if (e.error === "canceled" || e.error === "interrupted") return; // reset del ciclo
-        finish();
-      };
-
-      synth.speak(u);
-
-      // Workaround de Chrome: reanudar cada 8 s evita que se congele en textos largos.
-      if (keepAliveRef.current) clearInterval(keepAliveRef.current);
-      keepAliveRef.current = setInterval(() => {
-        if (synth.speaking && !userPausedRef.current && !synth.paused) {
-          synth.pause();
-          synth.resume();
+        // Log liviano para que el usuario pueda reportar qué pasó.
+        if (typeof console !== "undefined" && reason) {
+          // eslint-disable-next-line no-console
+          console.debug(`[gem] speak finished (${reason})`);
         }
-      }, 8000);
+      };
+
+      u.onstart = () => {
+        speakStartTsRef.current = Date.now();
+        speakLastActiveRef.current = Date.now();
+        goPhase("speaking");
+        setStatus("Respondiendo…");
+        // Si el usuario pausa, dejamos de contar "actividad" para que el
+        // watchdog no mate una pausa legítima.
+      };
+      u.onpause = () => {
+        // Pausa explícita del usuario: no tocamos nada, el watchdog
+        // respeta `userPausedRef`.
+      };
+      u.onresume = () => {
+        speakLastActiveRef.current = Date.now();
+      };
+      u.onboundary = () => {
+        speakLastActiveRef.current = Date.now();
+      };
+      u.onend = () => finish("onend");
+      u.onerror = (e) => {
+        // "canceled" / "interrupted" suelen ser nuestro propio `cancel()` o
+        // un reset del ciclo. No finalizamos la app, solo limpiamos.
+        if (e.error === "canceled" || e.error === "interrupted") {
+          stopWatchdog();
+          return;
+        }
+        finish(`onerror: ${e.error || "unknown"}`);
+      };
+
+      // Warm-up de salida ANTES de pedir al sistema que hable. Esto le
+      // "enseña" al ruteo de audio de Android que ya hay un sink activo,
+      // y la utterance sale por la misma ruta (BT en lugar de altavoz).
+      void warmupOutput().then(() => {
+        try {
+          synth.speak(u);
+        } catch {
+          finish("speak threw");
+        }
+      });
+
+      // Watchdog: si llevamos mucho tiempo sin actividad de habla y
+      // tampoco es una pausa del usuario, forzamos la finalización.
+      speakWatchdogRef.current = setInterval(() => {
+        if (phaseRef.current !== "speaking" && phaseRef.current !== "voicePaused") {
+          stopWatchdog();
+          return;
+        }
+        if (userPausedRef.current) return; // pausa legítima
+        if (synth.paused) return; // pausa del sistema
+        const now = Date.now();
+        const idle = now - speakLastActiveRef.current;
+        // Sin boundary en 12 s → algo se trabó (Chrome en Android suele
+        // cortar el utterance sin disparar onend). Cerramos.
+        if (speakLastActiveRef.current > 0 && idle > 12000) {
+          try {
+            synth.cancel();
+          } catch {
+            /* no-op */
+          }
+          finish("watchdog: idle > 12s");
+          return;
+        }
+        // Red de seguridad dura: 90 s totales.
+        if (now - speakStartTsRef.current > 90000) {
+          try {
+            synth.cancel();
+          } catch {
+            /* no-op */
+          }
+          finish("watchdog: 90s total");
+        }
+      }, 2000);
     },
-    [goPhase]
+    [goPhase, stopWatchdog]
   );
+
+  /* Limpia el watchdog al desmontar. */
+  useEffect(() => {
+    return () => stopWatchdog();
+  }, [stopWatchdog]);
 
   /* ============ BOTÓN 1 · GRABAR / PAUSAR / REANUDAR ============ */
 
@@ -406,8 +578,19 @@ export default function App() {
     setStatus("Solicitando micrófono…");
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia(buildAudioConstraints());
       streamRef.current = stream;
+
+      // Apenas conseguimos un stream válido, los labels de los
+      // dispositivos pasan a ser legibles. Refrescamos la lista para
+      // que el selector muestre el nombre real del receptor USB/BT.
+      try {
+        const d = await startDeviceWatcher();
+        setInputDevices(d.inputs);
+        setOutputDevices(d.outputs);
+      } catch {
+        /* enumeración opcional */
+      }
 
       // Analizador para el osciloscopio (comparte el AudioContext de los beeps)
       const actx = ensureAudio();
@@ -464,7 +647,7 @@ export default function App() {
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [clearAllIntervals, teardownMic, goPhase, startChrono]);
+  }, [clearAllIntervals, teardownMic, goPhase, startChrono, buildAudioConstraints]);
 
   /**
    * Acción del Botón 1 según la fase actual.
@@ -871,6 +1054,77 @@ export default function App() {
             <h2 className="mb-3 flex items-center gap-2 font-display text-xs font-semibold uppercase tracking-[0.2em] text-[#8fb0ac]">
               <KeyIcon size={15} /> Configuración
             </h2>
+
+            <label className="mb-1 block font-mono-gem text-[10px] uppercase tracking-widest text-[#8fb0ac]" htmlFor="gem-mic">
+              Micrófono de entrada
+            </label>
+            <div className="mb-3 flex gap-2">
+              <select
+                id="gem-mic"
+                value={selectedInputId ?? ""}
+                onChange={(e) => {
+                  const v = e.target.value || null;
+                  setSelectedInputId(v);
+                  saveInputId(v);
+                }}
+                className="min-w-0 flex-1 rounded-lg border border-[#1e3b41] bg-[#0a1619] px-3 py-2 font-mono-gem text-xs text-[#e9f4f1] outline-none transition-colors focus:border-[#4cc9d4]/60"
+              >
+                <option value="">Predeterminado del sistema</option>
+                {inputDevices.map((d, i) => (
+                  <option key={d.deviceId || `in-${i}`} value={d.deviceId}>
+                    {d.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <p className="mb-3 -mt-2 text-[11px] leading-relaxed text-[#8fb0ac]">
+              Si usás un mic corbatero por USB-C o Bluetooth, elegilo acá. La próxima
+              grabación lo va a tomar.
+            </p>
+
+            <label className="mb-1 block font-mono-gem text-[10px] uppercase tracking-widest text-[#8fb0ac]" htmlFor="gem-out">
+              Salida de audio (auriculares / BT)
+            </label>
+            <div className="mb-3 flex gap-2">
+              <select
+                id="gem-out"
+                value={selectedOutputId ?? ""}
+                onChange={(e) => {
+                  const v = e.target.value || null;
+                  setSelectedOutputId(v);
+                  saveOutputId(v);
+                }}
+                className="min-w-0 flex-1 rounded-lg border border-[#1e3b41] bg-[#0a1619] px-3 py-2 font-mono-gem text-xs text-[#e9f4f1] outline-none transition-colors focus:border-[#4cc9d4]/60"
+                disabled={!supportsOutputSelection() && !supportsAudioContextSinkId()}
+                title={
+                  supportsOutputSelection() || supportsAudioContextSinkId()
+                    ? "Cambia la salida de los sonidos de la web y de la voz del asistente"
+                    : "Este navegador no permite elegir dispositivo de salida"
+                }
+              >
+                <option value="">Predeterminada del sistema</option>
+                {outputDevices.map((d, i) => (
+                  <option key={d.deviceId || `out-${i}`} value={d.deviceId}>
+                    {d.label}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={() => {
+                  void warmupOutput();
+                  sfx.ready();
+                }}
+                className="ctrl-btn rounded-lg border border-[#3ddc97]/50 bg-[#3ddc97]/10 px-3 py-2 text-xs font-semibold text-[#3ddc97] hover:bg-[#3ddc97]/20"
+                title="Reproduce un sonido corto por el dispositivo elegido"
+              >
+                Probar
+              </button>
+            </div>
+            <p className="mb-4 -mt-2 text-[11px] leading-relaxed text-[#8fb0ac]">
+              Seleccioná los auriculares o el dispositivo Bluetooth/USB-C. La voz del
+              asistente y los beeps de feedback saldrán por acá.
+            </p>
 
             <label className="mb-1 block font-mono-gem text-[10px] uppercase tracking-widest text-[#8fb0ac]" htmlFor="gem-key">
               API Key de Gemini

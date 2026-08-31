@@ -23,6 +23,8 @@ export const SOUND_VOLUME = 0.3;
 
 let ctx: AudioContext | null = null;
 let muted = false;
+/** `sinkId` actualmente aplicado al AudioContext (si el navegador lo soporta). */
+let currentSinkId: string | null = null;
 
 /** Silencia o reactiva todos los sonidos de feedback. */
 export function setSfxMuted(value: boolean) {
@@ -33,18 +35,61 @@ export function setSfxMuted(value: boolean) {
  * Garantiza un AudioContext activo. Se crea dentro del gesto del
  * usuario para cumplir la política de autoplay y se comparte con
  * el analizador de la forma de onda del micrófono.
+ *
+ * Si el navegador soporta `setSinkId` en AudioContext y la página
+ * seleccionó un dispositivo de salida, lo aplicamos para que los
+ * sfx (beeps de feedback) salgan por el dispositivo elegido
+ * (auriculares BT, USB-C, etc.).
  */
 export function ensureAudio(): AudioContext {
   if (!ctx) {
     const AC =
       window.AudioContext ||
       (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-    ctx = new AC();
+    const opts: AudioContextOptions = {};
+    if (currentSinkId) {
+      (opts as unknown as { sinkId?: string }).sinkId = currentSinkId;
+    }
+    try {
+      ctx = new AC(opts);
+    } catch {
+      // Algunos navegadores no aceptan el objeto de opciones vacío;
+      // caemos al constructor simple.
+      ctx = new AC();
+    }
+  } else if (currentSinkId) {
+    // Si el sink cambió desde la última creación, intentamos actualizarlo
+    // en caliente. No-op en navegadores que no lo soporten.
+    const c = ctx as unknown as { setSinkId?: (id: string) => Promise<void> };
+    if (typeof c.setSinkId === "function") {
+      try {
+        void c.setSinkId(currentSinkId);
+      } catch {
+        /* ignorar */
+      }
+    }
   }
   if (ctx.state === "suspended") {
     void ctx.resume();
   }
   return ctx;
+}
+
+/**
+ * Cambia el dispositivo de salida del AudioContext (donde esté soportado).
+ * Devuelve `true` si se aplicó, `false` si el navegador no lo soporta.
+ */
+export function setOutputSinkId(id: string | null): boolean {
+  currentSinkId = id;
+  if (!ctx) return false;
+  const c = ctx as unknown as { setSinkId?: (id: string) => Promise<void> };
+  if (typeof c.setSinkId !== "function") return false;
+  try {
+    void c.setSinkId(id ?? "default");
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 interface ToneOpts {
@@ -117,3 +162,112 @@ export const sfx = {
     tone(170, 0.16, { type: "square", gain: 0.3, at: 0.13 });
   },
 };
+
+/* ============================================================
+   WARM-UP DE SALIDA
+   ------------------------------------------------------------
+   En Android (Chrome / Samsung Internet) `speechSynthesis` a veces
+   arranca por el altavoz del teléfono aunque haya un dispositivo
+   Bluetooth conectado. La causa típica: la página no estaba
+   reproduciendo audio por una ruta "ruteable" cuando se dispara
+   el TTS, así que el sistema elige el destino por defecto (el
+   altavoz).
+
+   Truco: justo antes de `speak()`, reproducimos ~80 ms de silencio
+   por un `<audio>` element con `setSinkId` aplicado al dispositivo
+   de salida elegido. Esto "engancha" el destino BT, y la utterance
+   siguiente sale por la misma ruta.
+   ============================================================ */
+
+let warmupAudio: HTMLAudioElement | null = null;
+let warmupSinkId: string | null = null;
+
+/** Devuelve (y crea perezoso) el `<audio>` element usado para warm-up. */
+function getWarmupAudio(): HTMLAudioElement {
+  if (!warmupAudio) {
+    warmupAudio = new Audio();
+    warmupAudio.preload = "auto";
+    // Generamos un WAV de 80 ms en silencio. 16-bit mono a 8 kHz = 1600 muestras = 3200 bytes.
+    const sampleRate = 8000;
+    const samples = Math.floor(sampleRate * 0.08);
+    const dataSize = samples * 2;
+    const buffer = new ArrayBuffer(44 + dataSize);
+    const view = new DataView(buffer);
+    const writeStr = (off: number, s: string) => {
+      for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i));
+    };
+    writeStr(0, "RIFF");
+    view.setUint32(4, 36 + dataSize, true);
+    writeStr(8, "WAVE");
+    writeStr(12, "fmt ");
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true); // PCM
+    view.setUint16(22, 1, true); // mono
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * 2, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+    writeStr(36, "data");
+    view.setUint32(40, dataSize, true);
+    // samples ya quedan a 0 (silencio).
+    const blob = new Blob([buffer], { type: "audio/wav" });
+    warmupAudio.src = URL.createObjectURL(blob);
+  }
+  return warmupAudio;
+}
+
+/** Aplica el `sinkId` al elemento de warm-up. Se llama cuando
+ *  el usuario cambia el dispositivo de salida. */
+export function setWarmupSinkId(id: string | null) {
+  warmupSinkId = id;
+  const a = getWarmupAudio();
+  const sa = a as unknown as { setSinkId?: (id: string) => Promise<void> };
+  if (typeof sa.setSinkId === "function") {
+    try {
+      void sa.setSinkId(id ?? "default");
+    } catch {
+      /* el navegador no acepta el dispositivo — se ignora */
+    }
+  }
+}
+
+/**
+ * Dispara el warm-up de salida. Devuelve una promesa que se
+ * resuelve cuando el navegador aceptó reproducir el silencio
+ * (o inmediatamente si no fue posible). Pensado para llamarlo
+ * justo antes de `speechSynthesis.speak()`.
+ */
+export function warmupOutput(): Promise<void> {
+  const a = getWarmupAudio();
+  // Re-aplicamos el sink actual por si cambió.
+  const sa = a as unknown as { setSinkId?: (id: string) => Promise<void> };
+  if (typeof sa.setSinkId === "function" && warmupSinkId !== null) {
+    try {
+      void sa.setSinkId(warmupSinkId);
+    } catch {
+      /* no-op */
+    }
+  }
+  return new Promise<void>((resolve) => {
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      resolve();
+    };
+    try {
+      a.currentTime = 0;
+      const p = a.play();
+      if (p && typeof p.then === "function") {
+        p.then(finish).catch(finish);
+      } else {
+        // Navegadores sin promesa: resolvemos a los 30 ms igual.
+        setTimeout(finish, 30);
+      }
+    } catch {
+      finish();
+    }
+    // Red de seguridad por si `play()` no dispara nada.
+    setTimeout(finish, 120);
+  });
+}
