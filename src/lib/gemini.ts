@@ -1,7 +1,7 @@
-import { blobToBase64 } from './sounds';
+import { GoogleGenAI } from "@google/genai";
 
-export const GEMINI_MODEL = 'gemini-3.6-flash';
-export const SYSTEM_PROMPT = 'Eres un asistente útil y amable.';
+export const GEMINI_MODEL = "gemini-3.6-flash";
+export const SYSTEM_PROMPT = "Eres un asistente útil y amable.";
 
 /**
  * Lee la API key desde la variable de entorno de Vite.
@@ -9,7 +9,7 @@ export const SYSTEM_PROMPT = 'Eres un asistente útil y amable.';
  * haya guardado en el panel de Configuración (localStorage).
  */
 export const GEMINI_API_KEY: string = (
-  (import.meta as ImportMeta & { env: Record<string, string | undefined> }).env?.VITE_GEMINI_API_KEY ?? ''
+  (import.meta as ImportMeta & { env: Record<string, string | undefined> }).env?.VITE_GEMINI_API_KEY ?? ""
 ).trim();
 
 
@@ -24,6 +24,11 @@ export function pickMimeType(): string {
   return candidates.find((m) => MediaRecorder.isTypeSupported(m)) ?? "audio/webm";
 }
 
+/**
+ * Convierte un Blob (audio grabado) a una cadena Base64 *sin* el prefijo
+ * `data:<mime>;base64,` que agrega FileReader — es lo que espera Gemini
+ * en `inlineData.data`.
+ */
 export function blobToBase64(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -36,60 +41,80 @@ export function blobToBase64(blob: Blob): Promise<string> {
   });
 }
 
+/** Extrae un mensaje legible de un error arbitrario (incluido el del SDK). */
+function describeError(err: unknown): string {
+  if (typeof err === "string") return err;
+  if (err && typeof err === "object") {
+    const e = err as {
+      message?: string;
+      status?: number | string;
+      code?: number | string;
+      error?: { message?: string; code?: number | string; status?: string };
+    };
+    if (e.error?.message) {
+      const code = e.error.code ?? e.error.status ?? e.status ?? e.code;
+      return code ? `[${code}] ${e.error.message}` : e.error.message;
+    }
+    if (e.message) return e.message;
+  }
+  return "Error desconocido al hablar con Gemini.";
+}
+
+/**
+ * Envía el audio a Gemini usando el SDK oficial `@google/genai`.
+ *
+ * Usamos el SDK (en lugar de `fetch` directo) porque Google dejó de aceptar
+ * las nuevas Auth Keys con prefijo `AQ.` en el endpoint REST crudo para
+ * algunas cuentas — el SDK negocia la auth correctamente y además nos da
+ * errores tipados con el mensaje real de Google.
+ */
 export async function askGemini(base64Audio: string, mimeType: string, apiKey: string): Promise<string> {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
+  const cleanKey = apiKey.trim();
+  if (!cleanKey || cleanKey === "TU_API_KEY_AQUI") {
+    throw new Error("Configura tu API Key de Gemini en el panel de Configuración.");
+  }
 
-  const body = {
-    systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
-    contents: [
-      {
-        parts: [
-          { inlineData: { mimeType, data: base64Audio } },
-          { text: "Escucha el audio adjunto y responde según las instrucciones." },
-        ],
-      },
-    ],
-  };
+  const ai = new GoogleGenAI({ apiKey: cleanKey });
 
-  let res: Response;
+  let response;
   try {
-    res = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-goog-api-key": apiKey,
+    response = await ai.models.generateContent({
+      model: GEMINI_MODEL,
+      contents: [
+        {
+          parts: [
+            { inlineData: { mimeType, data: base64Audio } },
+            { text: "Escucha el audio adjunto y responde según las instrucciones." },
+          ],
+        },
+      ],
+      config: {
+        systemInstruction: SYSTEM_PROMPT,
       },
-      body: JSON.stringify(body),
     });
-  } catch {
-    throw new Error("Sin conexión: no se pudo contactar a Gemini. Revisa tu red e inténtalo de nuevo.");
+  } catch (err) {
+    const detail = describeError(err);
+    const lower = detail.toLowerCase();
+    if (
+      lower.includes("api key") ||
+      lower.includes("auth") ||
+      lower.includes("credential") ||
+      lower.includes("permission") ||
+      lower.includes("401") ||
+      lower.includes("403")
+    ) {
+      throw new Error(`API Key rechazada por Gemini: ${detail}`);
+    }
+    if (lower.includes("quota") || lower.includes("429") || lower.includes("rate")) {
+      throw new Error(`Cuota o rate-limit de Gemini: ${detail}`);
+    }
+    if (lower.includes("network") || lower.includes("fetch") || lower.includes("econn") || lower.includes("timeout")) {
+      throw new Error(`Sin conexión con Gemini: ${detail}`);
+    }
+    throw new Error(`Gemini rechazó la solicitud: ${detail}`);
   }
 
-  if (!res.ok) {
-    let detail = "";
-    try {
-      const j = (await res.json()) as { error?: { message?: string } };
-      detail = j?.error?.message ?? "";
-    } catch {
-      /* cuerpo sin JSON */
-    }
-    if (res.status === 400 || res.status === 401 || res.status === 403) {
-      throw new Error("API Key inválida o sin permisos. Revísala en el panel de Configuración.");
-    }
-    if (res.status === 429) {
-      throw new Error("Cuota de la API superada. Espera unos segundos y vuelve a intentarlo.");
-    }
-    throw new Error(`Gemini respondió un error ${res.status}${detail ? `: ${detail}` : "."}`);
-  }
-
-  const json = (await res.json()) as {
-    candidates?: { content?: { parts?: { text?: string }[] } }[];
-  };
-  const text = (json.candidates?.[0]?.content?.parts ?? [])
-    .map((p) => p.text ?? "")
-    .join("")
-    .trim();
-
+  const text = (response?.text ?? "").trim();
   if (!text) {
     throw new Error("Gemini no devolvió texto. Intenta grabar la pregunta con más claridad.");
   }
