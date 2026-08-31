@@ -1,29 +1,3 @@
-# Asistente GEM · Biología del Comportamiento
-
-Consola de estudio 100% frontend que graba tu pregunta por voz, la envía a
-Gemini y te lee la respuesta en español. Se publica en **GitHub Pages** con
-un workflow automático.
-
----
-
-## 🔐 API Key de Gemini — IMPORTANTE
-
-Google rotó el formato de las API keys. Si tu key **empieza con `AQ.`** es
-del nuevo Google AI Studio y **se elimina automáticamente** si la detecta
-expuesta en un repositorio público. Por eso:
-
-- ❌ **Nunca** commitees `.env` con la key adentro.
-- ❌ **Nunca** pegues la key en el código fuente.
-- ✅ Para desarrollo local: pegala en el panel **Configuración** de la app
-  (queda sólo en el `localStorage` de tu navegador) o en un `.env` local
-  (ya está en `.gitignore`).
-- ✅ Para deploy en GitHub Pages: cargala como **Secret** del repo. Ver
-  paso 3 más abajo.
-
-> Conseguir una key gratis: <https://aistudio.google.com/apikey>
-
----
-
 ## 🚀 Publicar en GitHub Pages (3 pasos)
 
 Este repo ya incluye un **workflow de despliegue automático**
