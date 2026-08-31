@@ -43,7 +43,7 @@ import {
   UploadIcon,
   GlobeIcon,
 } from "./components/icons";
-import { ensureAudio, sfx, setSfxMuted, SOUND_VOLUME, warmupOutput, setWarmupSinkId, setOutputSinkId } from "./lib/sounds";
+import { ensureAudio, sfx, setSfxMuted, SOUND_VOLUME, warmupOutput, setWarmupSinkId } from "./lib/sounds";
 import {
   askGemini,
   blobToBase64,
@@ -247,6 +247,11 @@ export default function App() {
   const [outputDevices, setOutputDevices] = useState<AudioDevice[]>([]);
   const [selectedInputId, setSelectedInputId] = useState<string | null>(() => getSavedInputId());
   const [selectedOutputId, setSelectedOutputId] = useState<string | null>(() => getSavedOutputId());
+  /** Nombre del dispositivo de mic que el stream está usando AHORA MISMO
+   *  (lo leemos de `track.getSettings().label` tras cada getUserMedia). */
+  const [activeMicLabel, setActiveMicLabel] = useState<string>("");
+  /** Mensaje diagnóstico adicional (p.ej. si el deviceId exacto no se pudo aplicar). */
+  const [micDiagnostic, setMicDiagnostic] = useState<string>("");
 
   /* ----- Referencias internas (evitan closures obsoletos) ----- */
   const phaseRef = useRef<Phase>("idle");
@@ -318,12 +323,13 @@ export default function App() {
     };
   }, []);
 
-  /* ----- Aplica el dispositivo de salida elegido al motor de audio ----- */
+  /* ----- Aplica el dispositivo de salida elegido al motor de audio -----
+   * Los sfx se reproducen por <audio> elements (con setSinkId), no por
+   * el AudioContext — en Chrome Android el setSinkId del AudioContext
+   * no funciona de forma consistente. Por eso acá solo actualizamos
+   * el sinkId del elemento de warm-up (para que el TTS también
+   * "vea" la salida BT). */
   useEffect(() => {
-    // AudioContext (para los sfx)
-    setOutputSinkId(selectedOutputId);
-    // <audio> element de warm-up (para que el speechSynthesis también
-    // "vea" la salida BT antes de hablar)
     setWarmupSinkId(selectedOutputId);
   }, [selectedOutputId]);
 
@@ -397,23 +403,25 @@ export default function App() {
    * Decisiones de diseño (problemas reportados en S25 Ultra):
    *
    *  · Antes de hablar, hacemos un "warm-up" de salida: reproducimos
-   *    ~80 ms de silencio por un <audio> con setSinkId aplicado al
+   *    ~100 ms de silencio por un <audio> con setSinkId aplicado al
    *    dispositivo de salida elegido. En Android, este truco "engancha"
    *    el destino BT / USB-C; sin él, speechSynthesis puede salir por
    *    el altavoz del teléfono.
    *
-   *  · NO usamos el viejo keepAlive (pause/resume cada 8 s): ese
-   *    workaround estaba causando los cortes aleatorios en muchos
-   *    Androids — el navegador lo interpretaba como interrupción y
-   *    cancelaba el utterance a mitad de frase.
+   *  · Watchdog basado en **polling de synth.speaking cada 500 ms**
+   *    (no en `onboundary`, que algunos navegadores no disparan). Si
+   *    el utterance dejó de hablar sin disparar `onend`, lo detectamos
+   *    y finalizamos para que la página no quede muda.
    *
-   *  · En su lugar, un watchdog: si pasaron N segundos sin que
-   *    `synth.speaking` cambie de true→false con su `onend` correspondiente,
-   *    forzamos la finalización para que la página no quede muda.
+   *  · El viejo keepAlive (pause/resume cada 8 s) se eliminó: en
+   *    muchos Androids era lo que cortaba el utterance a mitad de frase.
    * ============================================================ */
   const speakWatchdogRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const speakLastActiveRef = useRef(0);
   const speakStartTsRef = useRef(0);
+  /** true mientras el utterance está hablando, según el motor del sistema. */
+  const speakActuallyPlayingRef = useRef(false);
+  /** Duración estimada del utterance (texto / 14 cps ≈ tiempo en ms). */
+  const speakEstimatedMsRef = useRef(0);
 
   const stopWatchdog = useCallback(() => {
     if (speakWatchdogRef.current) {
@@ -428,6 +436,7 @@ export default function App() {
       const synth = window.speechSynthesis;
       synth.cancel(); // corta cualquier lectura previa
       stopWatchdog();
+      speakActuallyPlayingRef.current = false;
 
       const u = new SpeechSynthesisUtterance(text);
       u.lang = "es-ES";
@@ -438,15 +447,16 @@ export default function App() {
       u.volume = 1;
       userPausedRef.current = false;
       utterRef.current = u;
+      // Estimación cruda: ~14 caracteres por segundo en español a rate=1.
+      speakEstimatedMsRef.current = Math.max(2000, (text.length / 14) * 1000);
 
       const finish = (reason: string) => {
         stopWatchdog();
-        // Solo vuelve a "idle" si esta utterance sigue siendo la actual
+        speakActuallyPlayingRef.current = false;
         if (utterRef.current === u && (phaseRef.current === "speaking" || phaseRef.current === "voicePaused")) {
           goPhase("idle");
           setStatus("Listo — presiona Grabar para otra pregunta");
         }
-        // Log liviano para que el usuario pueda reportar qué pasó.
         if (typeof console !== "undefined" && reason) {
           // eslint-disable-next-line no-console
           console.debug(`[gem] speak finished (${reason})`);
@@ -455,28 +465,15 @@ export default function App() {
 
       u.onstart = () => {
         speakStartTsRef.current = Date.now();
-        speakLastActiveRef.current = Date.now();
+        speakActuallyPlayingRef.current = true;
         goPhase("speaking");
         setStatus("Respondiendo…");
-        // Si el usuario pausa, dejamos de contar "actividad" para que el
-        // watchdog no mate una pausa legítima.
-      };
-      u.onpause = () => {
-        // Pausa explícita del usuario: no tocamos nada, el watchdog
-        // respeta `userPausedRef`.
-      };
-      u.onresume = () => {
-        speakLastActiveRef.current = Date.now();
-      };
-      u.onboundary = () => {
-        speakLastActiveRef.current = Date.now();
       };
       u.onend = () => finish("onend");
       u.onerror = (e) => {
-        // "canceled" / "interrupted" suelen ser nuestro propio `cancel()` o
-        // un reset del ciclo. No finalizamos la app, solo limpiamos.
         if (e.error === "canceled" || e.error === "interrupted") {
           stopWatchdog();
+          speakActuallyPlayingRef.current = false;
           return;
         }
         finish(`onerror: ${e.error || "unknown"}`);
@@ -493,38 +490,54 @@ export default function App() {
         }
       });
 
-      // Watchdog: si llevamos mucho tiempo sin actividad de habla y
-      // tampoco es una pausa del usuario, forzamos la finalización.
+      // Watchdog por polling — más confiable que `onboundary` (que en
+      // Samsung Internet / algunos Chromes Android no se dispara).
+      //
+      // Lógica:
+      //  - Si synth.speaking es true, mantenemos la marca interna.
+      //  - Si en 1.5 s seguidos synth.speaking es false pero la fase
+      //    sigue siendo "speaking" → el utterance se cortó sin onend
+      //    y forzamos la finalización.
+      //  - Si pasó más del 200 % de la duración estimada, también
+      //    forzamos (red de seguridad).
+      let consecutiveQuiet = 0;
       speakWatchdogRef.current = setInterval(() => {
         if (phaseRef.current !== "speaking" && phaseRef.current !== "voicePaused") {
           stopWatchdog();
           return;
         }
-        if (userPausedRef.current) return; // pausa legítima
-        if (synth.paused) return; // pausa del sistema
-        const now = Date.now();
-        const idle = now - speakLastActiveRef.current;
-        // Sin boundary en 12 s → algo se trabó (Chrome en Android suele
-        // cortar el utterance sin disparar onend). Cerramos.
-        if (speakLastActiveRef.current > 0 && idle > 12000) {
-          try {
-            synth.cancel();
-          } catch {
-            /* no-op */
-          }
-          finish("watchdog: idle > 12s");
+        if (userPausedRef.current || synth.paused) {
+          // Pausa del usuario: no matamos.
+          consecutiveQuiet = 0;
           return;
         }
-        // Red de seguridad dura: 90 s totales.
-        if (now - speakStartTsRef.current > 90000) {
+        const isSpeaking = synth.speaking;
+        if (isSpeaking) {
+          speakActuallyPlayingRef.current = true;
+          consecutiveQuiet = 0;
+        } else {
+          consecutiveQuiet += 1;
+          // 1.5 s seguidos de silencio → el utterance se cortó.
+          if (consecutiveQuiet >= 3) {
+            try {
+              synth.cancel();
+            } catch {
+              /* no-op */
+            }
+            finish(`watchdog: synth.speaking false ${consecutiveQuiet * 500}ms`);
+            return;
+          }
+        }
+        const elapsed = Date.now() - speakStartTsRef.current;
+        if (speakStartTsRef.current > 0 && elapsed > speakEstimatedMsRef.current * 2 + 5000) {
           try {
             synth.cancel();
           } catch {
             /* no-op */
           }
-          finish("watchdog: 90s total");
+          finish("watchdog: > 2x estimación");
         }
-      }, 2000);
+      }, 500);
     },
     [goPhase, stopWatchdog]
   );
@@ -576,10 +589,44 @@ export default function App() {
 
     goPhase("starting");
     setStatus("Solicitando micrófono…");
+    setActiveMicLabel("");
+    setMicDiagnostic("");
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia(buildAudioConstraints());
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia(buildAudioConstraints());
+      } catch (err) {
+        // Si el `deviceId: { exact }` no funciona (dispositivo desconectado,
+        // driver que no acepta el constraint, etc.), caemos al default
+        // del sistema. La página sigue funcionando; el usuario ve un
+        // diagnóstico claro.
+        const name = (err as { name?: string })?.name;
+        if (name === "OverconstrainedError" || name === "NotFoundError") {
+          setMicDiagnostic(
+            "El dispositivo seleccionado no está disponible. Se usó el micrófono predeterminado del sistema."
+          );
+          stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        } else {
+          throw err;
+        }
+      }
       streamRef.current = stream;
+
+      // Leemos el nombre real del dispositivo que el stream está usando.
+      const track = stream.getAudioTracks()[0];
+      if (track) {
+        const settings = track.getSettings?.() ?? {};
+        const label = (settings as { label?: string }).label || track.label || "Micrófono activo";
+        setActiveMicLabel(label);
+        // Si el stream terminó usando un deviceId distinto al que el
+        // usuario eligió (porque el exact falló), lo sincronizamos.
+        const usedId = (settings as { deviceId?: string }).deviceId;
+        if (usedId && usedId !== selectedInputId) {
+          setSelectedInputId(usedId);
+          saveInputId(usedId);
+        }
+      }
 
       // Apenas conseguimos un stream válido, los labels de los
       // dispositivos pasan a ser legibles. Refrescamos la lista para
@@ -1058,7 +1105,7 @@ export default function App() {
             <label className="mb-1 block font-mono-gem text-[10px] uppercase tracking-widest text-[#8fb0ac]" htmlFor="gem-mic">
               Micrófono de entrada
             </label>
-            <div className="mb-3 flex gap-2">
+            <div className="mb-2 flex gap-2">
               <select
                 id="gem-mic"
                 value={selectedInputId ?? ""}
@@ -1066,6 +1113,7 @@ export default function App() {
                   const v = e.target.value || null;
                   setSelectedInputId(v);
                   saveInputId(v);
+                  setMicDiagnostic("");
                 }}
                 className="min-w-0 flex-1 rounded-lg border border-[#1e3b41] bg-[#0a1619] px-3 py-2 font-mono-gem text-xs text-[#e9f4f1] outline-none transition-colors focus:border-[#4cc9d4]/60"
               >
@@ -1076,10 +1124,34 @@ export default function App() {
                   </option>
                 ))}
               </select>
+              <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    const d = await startDeviceWatcher();
+                    setInputDevices(d.inputs);
+                    setOutputDevices(d.outputs);
+                  } catch {
+                    /* no-op */
+                  }
+                }}
+                className="ctrl-btn rounded-lg border border-[#1e3b41] bg-[#0a1619] px-3 py-2 text-xs font-semibold text-[#8fb0ac] hover:border-[#4cc9d4]/60 hover:text-[#e9f4f1]"
+                title="Reescanear dispositivos (útil después de conectar/desconectar USB-C o BT)"
+              >
+                Re-escanear
+              </button>
             </div>
-            <p className="mb-3 -mt-2 text-[11px] leading-relaxed text-[#8fb0ac]">
-              Si usás un mic corbatero por USB-C o Bluetooth, elegilo acá. La próxima
-              grabación lo va a tomar.
+            {activeMicLabel && (
+              <p className="mb-1 -mt-1 font-mono-gem text-[10px] uppercase tracking-widest text-[#3ddc97]">
+                ● {activeMicLabel}
+              </p>
+            )}
+            {micDiagnostic && (
+              <p className="mb-2 -mt-1 text-[11px] leading-relaxed text-[#ffc24b]">{micDiagnostic}</p>
+            )}
+            <p className="mb-3 -mt-1 text-[11px] leading-relaxed text-[#8fb0ac]">
+              Si usás un mic corbatero por USB-C o Bluetooth, elegilo acá y presioná
+              <b> Re-escanear</b> después de enchufarlo. La próxima grabación lo va a tomar.
             </p>
 
             <label className="mb-1 block font-mono-gem text-[10px] uppercase tracking-widest text-[#8fb0ac]" htmlFor="gem-out">
@@ -1095,11 +1167,10 @@ export default function App() {
                   saveOutputId(v);
                 }}
                 className="min-w-0 flex-1 rounded-lg border border-[#1e3b41] bg-[#0a1619] px-3 py-2 font-mono-gem text-xs text-[#e9f4f1] outline-none transition-colors focus:border-[#4cc9d4]/60"
-                disabled={!supportsOutputSelection() && !supportsAudioContextSinkId()}
                 title={
                   supportsOutputSelection() || supportsAudioContextSinkId()
                     ? "Cambia la salida de los sonidos de la web y de la voz del asistente"
-                    : "Este navegador no permite elegir dispositivo de salida"
+                    : "Este navegador no permite elegir dispositivo de salida — se usará el predeterminado del sistema"
                 }
               >
                 <option value="">Predeterminada del sistema</option>
