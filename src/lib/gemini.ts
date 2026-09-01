@@ -89,12 +89,36 @@ function describeError(err: unknown): string {
 }
 
 /**
+ * Detecta errores transitorios del servicio (503 UNAVAILABLE,
+ * "high demand", "overloaded", etc.). En esos casos, reintentamos
+ * una vez antes de mostrar el error al usuario.
+ */
+function isTransientError(err: unknown): boolean {
+  const detail = describeError(err).toLowerCase();
+  return (
+    detail.includes("503") ||
+    detail.includes("unavailable") ||
+    detail.includes("high demand") ||
+    detail.includes("overloaded") ||
+    detail.includes("try again later")
+  );
+}
+
+/**
  * Envía el audio a Gemini usando el SDK oficial `@google/genai`.
  *
  * Usamos el SDK (en lugar de `fetch` directo) porque Google dejó de aceptar
  * las nuevas Auth Keys con prefijo `AQ.` en el endpoint REST crudo para
  * algunas cuentas — el SDK negocia la auth correctamente y además nos da
  * errores tipados con el mensaje real de Google.
+ *
+ * Manejo de errores:
+ *  - Errores transitorios (503/UNAVAILABLE/"high demand"): reintenta una
+ *    vez con 4 s de espera. Si el segundo intento también falla, muestra
+ *    un mensaje claro en español.
+ *  - API key inválida / 401/403: mensaje específico, sin reintento.
+ *  - Cuota agotada / 429: mensaje específico, sin reintento.
+ *  - Errores de red: mensaje específico, sin reintento.
  */
 export async function askGemini(base64Audio: string, mimeType: string, apiKey: string): Promise<string> {
   const cleanKey = apiKey.trim();
@@ -104,50 +128,72 @@ export async function askGemini(base64Audio: string, mimeType: string, apiKey: s
 
   const ai = new GoogleGenAI({ apiKey: cleanKey });
 
-  let response;
-  try {
-    response = await ai.models.generateContent({
-      model: GEMINI_MODEL,
-      contents: [
-        {
-          parts: [
-            { inlineData: { mimeType, data: base64Audio } },
-            { text: "Escucha el audio adjunto y responde según las instrucciones." },
-          ],
-        },
+  const contents = [
+    {
+      parts: [
+        { inlineData: { mimeType, data: base64Audio } },
+        { text: "Escucha el audio adjunto y responde según las instrucciones." },
       ],
-      config: {
-        systemInstruction: SYSTEM_PROMPT,
-        // Subimos el techo para que la justificación de las 4 opciones
-        // (3 motivos de "por qué no las demás") no se trunque.
-        maxOutputTokens: 2048,
-      },
-    });
-  } catch (err) {
-    const detail = describeError(err);
-    const lower = detail.toLowerCase();
-    if (
-      lower.includes("api key") ||
-      lower.includes("auth") ||
-      lower.includes("credential") ||
-      lower.includes("permission") ||
-      lower.includes("401") ||
-      lower.includes("403")
-    ) {
-      throw new Error(`API Key rechazada por Gemini: ${detail}`);
+    },
+  ];
+  const config = {
+    systemInstruction: SYSTEM_PROMPT,
+    // Subimos el techo para que la justificación de las 4 opciones
+    // (3 motivos de "por qué no las demás") no se trunque.
+    maxOutputTokens: 2048,
+  };
+
+  const MAX_ATTEMPTS = 2;
+  let lastErr: unknown = null;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      const response = await ai.models.generateContent({
+        model: GEMINI_MODEL,
+        contents,
+        config,
+      });
+      const text = (response?.text ?? "").trim();
+      if (!text) {
+        throw new Error("Gemini no devolvió texto. Intenta grabar la pregunta con más claridad.");
+      }
+      return text;
+    } catch (err) {
+      lastErr = err;
+      if (attempt < MAX_ATTEMPTS && isTransientError(err)) {
+        // Espera 4 s antes del reintento. Mientras tanto la UI muestra
+        // "Procesando con Gemini…" (estado processing).
+        await new Promise((resolve) => setTimeout(resolve, 4000));
+        continue;
+      }
+      break;
     }
-    if (lower.includes("quota") || lower.includes("429") || lower.includes("rate")) {
-      throw new Error(`Cuota o rate-limit de Gemini: ${detail}`);
-    }
-    if (lower.includes("network") || lower.includes("fetch") || lower.includes("econn") || lower.includes("timeout")) {
-      throw new Error(`Sin conexión con Gemini: ${detail}`);
-    }
-    throw new Error(`Gemini rechazó la solicitud: ${detail}`);
   }
 
-  const text = (response?.text ?? "").trim();
-  if (!text) {
-    throw new Error("Gemini no devolvió texto. Intenta grabar la pregunta con más claridad.");
+  // Si llegamos acá, falló definitivamente. Mapeo a un mensaje en
+  // español claro, sin JSON crudo en la UI.
+  const detail = describeError(lastErr);
+  const lower = detail.toLowerCase();
+  if (
+    lower.includes("api key") ||
+    lower.includes("auth") ||
+    lower.includes("credential") ||
+    lower.includes("permission") ||
+    lower.includes("401") ||
+    lower.includes("403")
+  ) {
+    throw new Error(`API Key rechazada por Gemini: ${detail}`);
   }
-  return text;
+  if (lower.includes("quota") || lower.includes("429") || lower.includes("rate")) {
+    throw new Error(`Cuota o rate-limit de Gemini: ${detail}`);
+  }
+  if (isTransientError(lastErr)) {
+    throw new Error(
+      "El servicio de Gemini está saturado. Reintentá en unos minutos. " +
+        `Detalle: ${detail}`
+    );
+  }
+  if (lower.includes("network") || lower.includes("fetch") || lower.includes("econn") || lower.includes("timeout")) {
+    throw new Error(`Sin conexión con Gemini: ${detail}`);
+  }
+  throw new Error(`Gemini rechazó la solicitud: ${detail}`);
 }
