@@ -51,6 +51,8 @@ import {
   GEMINI_MODEL,
   SYSTEM_PROMPT,
   pickMimeType,
+  prepareForSpeech,
+  stripMarkdown,
 } from "./lib/gemini";
 import {
   type AudioDevice,
@@ -438,7 +440,8 @@ export default function App() {
       stopWatchdog();
       speakActuallyPlayingRef.current = false;
 
-      const u = new SpeechSynthesisUtterance(text);
+      const spoken = prepareForSpeech(text);
+      const u = new SpeechSynthesisUtterance(spoken);
       u.lang = "es-ES";
       const v = pickSpanishVoice(voicesRef.current);
       if (v) u.voice = v;
@@ -448,7 +451,7 @@ export default function App() {
       userPausedRef.current = false;
       utterRef.current = u;
       // Estimación cruda: ~14 caracteres por segundo en español a rate=1.
-      speakEstimatedMsRef.current = Math.max(2000, (text.length / 14) * 1000);
+      speakEstimatedMsRef.current = Math.max(2000, (spoken.length / 14) * 1000);
 
       const finish = (reason: string) => {
         stopWatchdog();
@@ -773,19 +776,22 @@ export default function App() {
       responseRef.current = text;
       setResponse(text);
       setError("");
+      // Limpiamos markdown una segunda vez acá por si la red de seguridad
+      // del backend no se aplicó (p.ej. texto cargado desde la bitácora).
+      const clean = stripMarkdown(text);
       setHistory((h) =>
         [
           {
             id: Date.now(),
             time: new Date().toLocaleTimeString("es", { hour: "2-digit", minute: "2-digit" }),
-            text,
+            text: clean,
           },
           ...h,
         ].slice(0, 8)
       );
 
       sfx.ready(); // beep alegre: respuesta lista
-      speak(text); // lectura automática en voz alta
+      speak(stripMarkdown(text)); // lectura automática en voz alta (sin markdown)
     } catch (err) {
       if (thinkRef.current) clearInterval(thinkRef.current);
       thinkRef.current = null;
@@ -864,10 +870,11 @@ export default function App() {
 
   const playHistoryItem = useCallback(
     (item: HistoryItem) => {
-      responseRef.current = item.text;
-      setResponse(item.text);
+      const clean = stripMarkdown(item.text);
+      responseRef.current = clean;
+      setResponse(clean);
       sfx.ready();
-      speak(item.text);
+      speak(clean);
     },
     [speak]
   );
@@ -1073,7 +1080,7 @@ export default function App() {
                 Las respuestas de esta sesión aparecerán aquí.
               </p>
             ) : (
-              <ul className="flex max-h-64 flex-col gap-2 overflow-y-auto pr-1">
+              <ul className="flex max-h-96 flex-col gap-2 overflow-y-auto pr-1">
                 {history.map((item, i) => (
                   <li key={item.id}>
                     <button
@@ -1086,7 +1093,7 @@ export default function App() {
                         <span>R{history.length - i} · {item.time}</span>
                         <PlayIcon size={11} className="text-[#8fb0ac]" />
                       </span>
-                      <span className="mt-1 line-clamp-2 block text-xs leading-relaxed text-[#cfe0dd]">
+                      <span className="mt-1 block text-xs leading-relaxed text-[#cfe0dd]">
                         {item.text}
                       </span>
                     </button>
