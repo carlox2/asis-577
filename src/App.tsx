@@ -442,13 +442,15 @@ export default function App() {
       u.lang = "es-ES";
       const v = pickSpanishVoice(voicesRef.current);
       if (v) u.voice = v;
-      u.rate = 1;
+      // Velocidad un poco más lenta: a 1.0 el motor de Samsung/Chrome
+      // lee muy rápido y cuesta seguirlo.
+      u.rate = 0.9;
       u.pitch = 1;
       u.volume = 1;
       userPausedRef.current = false;
       utterRef.current = u;
-      // Estimación cruda: ~14 caracteres por segundo en español a rate=1.
-      speakEstimatedMsRef.current = Math.max(2000, (text.length / 14) * 1000);
+      // Estimación cruda: ~13 caracteres por segundo en español a rate=0.9.
+      speakEstimatedMsRef.current = Math.max(2000, (text.length / 13) * 1000);
 
       const finish = (reason: string) => {
         stopWatchdog();
@@ -482,7 +484,11 @@ export default function App() {
       // Warm-up de salida ANTES de pedir al sistema que hable. Esto le
       // "enseña" al ruteo de audio de Android que ya hay un sink activo,
       // y la utterance sale por la misma ruta (BT en lugar de altavoz).
-      void warmupOutput().then(() => {
+      void warmupOutput().then(async () => {
+        // Pequeño delay extra para que el sink se "asiente" antes de
+        // que arranque la utterance — si arrancamos al toque se pierde
+        // el primer fragmento (sintetizado durante el cambio de ruta).
+        await new Promise((r) => setTimeout(r, 60));
         try {
           synth.speak(u);
         } catch {
@@ -821,6 +827,12 @@ export default function App() {
   /**
    * Controla la lectura de la respuesta: pausa, reanuda o vuelve a
    * reproducir desde el inicio si la lectura ya terminó.
+   *
+   * En Chrome para Android, `synth.resume()` a veces no reactiva el
+   * utterance (la fase pasa a "speaking" pero no sale sonido). Para
+   * esos casos, después de llamar a `resume()` esperamos 200 ms y
+   * verificamos si el utterance realmente está sonando. Si no, hacemos
+   * fallback: cancel() + speak() desde el principio.
    */
   const onVoiceButton = useCallback(() => {
     if (!("speechSynthesis" in window)) return;
@@ -833,10 +845,32 @@ export default function App() {
       goPhase("voicePaused");
       setStatus("Lectura en pausa");
     } else if (p === "voicePaused") {
-      synth.resume();
+      // 1) Intentar resume normal.
+      try {
+        synth.resume();
+      } catch {
+        /* no-op */
+      }
       userPausedRef.current = false;
       goPhase("speaking");
       setStatus("Respondiendo…");
+
+      // 2) Watchdog: si a los 200 ms el utterance no está sonando,
+      //    fue un resume fantasma. Reiniciamos desde el principio.
+      setTimeout(() => {
+        if (phaseRef.current !== "speaking") return; // ya cambió de fase
+        if (userPausedRef.current) return; // el usuario volvió a pausar
+        if (synth.speaking) return; // OK, sí está sonando
+        // Fallback: cancelar y reiniciar.
+        try {
+          synth.cancel();
+        } catch {
+          /* no-op */
+        }
+        if (responseRef.current) {
+          speak(responseRef.current);
+        }
+      }, 200);
     } else if (responseRef.current) {
       // Lectura terminada → reproducir de nuevo
       sfx.ready();

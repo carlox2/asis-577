@@ -291,7 +291,10 @@ function getWarmupAudio(): HTMLAudioElement {
   if (!warmupAudio) {
     warmupAudio = new Audio();
     warmupAudio.preload = "auto";
-    warmupAudio.src = URL.createObjectURL(silenceWav(0.1));
+    // 250 ms de silencio: le da tiempo a Android de "asentar" el
+    // nuevo sinkId antes de que llegue el utterance. Si es muy corto
+    // (probamos con 100 ms) el primer fragmento del TTS se pierde.
+    warmupAudio.src = URL.createObjectURL(silenceWav(0.25));
   }
   return warmupAudio;
 }
@@ -337,6 +340,6 @@ export function warmupOutput(): Promise<void> {
     } catch {
       finish();
     }
-    setTimeout(finish, 150);
+    setTimeout(finish, 320);
   });
 }
