@@ -422,6 +422,16 @@ export default function App() {
   const speakActuallyPlayingRef = useRef(false);
   /** Duración estimada del utterance (texto / 14 cps ≈ tiempo en ms). */
   const speakEstimatedMsRef = useRef(0);
+  /** Trozos de la respuesta (oraciones). Cada uno es una utterance aparte. */
+  const textPartsRef = useRef<string[]>([]);
+  /** Índice del trozo que se está hablando o se va a hablar. */
+  const partIndexRef = useRef(0);
+  /** true cuando hicimos synth.cancel() nosotros; el onend no debe
+   *  avanzar al siguiente chunk en ese caso. */
+  const isCancelingRef = useRef(false);
+  /** Ref a speakPart() para que onVoiceButton (resume) pueda continuar
+   *  la cadena de utterances sin recrear el closure. */
+  const speakPartRef = useRef<(() => void) | null>(null);
 
   const stopWatchdog = useCallback(() => {
     if (speakWatchdogRef.current) {
@@ -437,25 +447,30 @@ export default function App() {
       synth.cancel(); // corta cualquier lectura previa
       stopWatchdog();
       speakActuallyPlayingRef.current = false;
-
-      const u = new SpeechSynthesisUtterance(text);
-      u.lang = "es-ES";
-      const v = pickSpanishVoice(voicesRef.current);
-      if (v) u.voice = v;
-      // Velocidad un poco más lenta: a 1.0 el motor de Samsung/Chrome
-      // lee muy rápido y cuesta seguirlo.
-      u.rate = 0.9;
-      u.pitch = 1;
-      u.volume = 1;
       userPausedRef.current = false;
-      utterRef.current = u;
-      // Estimación cruda: ~13 caracteres por segundo en español a rate=0.9.
-      speakEstimatedMsRef.current = Math.max(2000, (text.length / 13) * 1000);
+      isCancelingRef.current = false;
 
-      const finish = (reason: string) => {
+      // Troceamos por oraciones (después de '.', '!', '?', o salto de
+      // línea). Cada trozo es una utterance aparte, así el pause/resume
+      // es robusto: cancelamos SOLO el trozo actual y al reanudar
+      // empezamos el siguiente con un utterance nuevo (no dependemos
+      // del synth.resume() que en Chrome Android suele dejar muda la
+      // utterance).
+      const parts = text
+        .split(/(?<=[.!?\n])\s+/)
+        .map((s) => s.trim())
+        .filter(Boolean);
+      textPartsRef.current = parts.length > 0 ? parts : [text];
+      partIndexRef.current = 0;
+      const totalChars = textPartsRef.current.reduce((acc, p) => acc + p.length, 0);
+      // Estimación cruda: ~13 caracteres por segundo en español a rate=0.9.
+      speakEstimatedMsRef.current = Math.max(2000, (totalChars / 13) * 1000);
+
+      // Cierra toda la reproducción y vuelve a idle.
+      const finishAll = (reason: string) => {
         stopWatchdog();
         speakActuallyPlayingRef.current = false;
-        if (utterRef.current === u && (phaseRef.current === "speaking" || phaseRef.current === "voicePaused")) {
+        if (phaseRef.current === "speaking" || phaseRef.current === "voicePaused") {
           goPhase("idle");
           setStatus("Listo — presiona Grabar para otra pregunta");
         }
@@ -465,47 +480,72 @@ export default function App() {
         }
       };
 
-      u.onstart = () => {
-        speakStartTsRef.current = Date.now();
-        speakActuallyPlayingRef.current = true;
-        goPhase("speaking");
-        setStatus("Respondiendo…");
-      };
-      u.onend = () => finish("onend");
-      u.onerror = (e) => {
-        if (e.error === "canceled" || e.error === "interrupted") {
-          stopWatchdog();
-          speakActuallyPlayingRef.current = false;
+      // Habla el chunk actual. Si terminó naturalmente, pasa al
+      // siguiente. Si fue por nuestro cancel() o pause, no avanza.
+      const speakPart = () => {
+        if (partIndexRef.current >= textPartsRef.current.length) {
+          finishAll("all parts done");
           return;
         }
-        finish(`onerror: ${e.error || "unknown"}`);
-      };
+        // Si el usuario pausó o cancelamos, no seguimos.
+        if (phaseRef.current === "idle" || userPausedRef.current) return;
+        const partText = textPartsRef.current[partIndexRef.current];
+        const u = new SpeechSynthesisUtterance(partText);
+        u.lang = "es-ES";
+        const v = pickSpanishVoice(voicesRef.current);
+        if (v) u.voice = v;
+        u.rate = 0.9;
+        u.pitch = 1;
+        u.volume = 1;
+        utterRef.current = u;
 
-      // Warm-up de salida ANTES de pedir al sistema que hable. Esto le
-      // "enseña" al ruteo de audio de Android que ya hay un sink activo,
-      // y la utterance sale por la misma ruta (BT en lugar de altavoz).
-      void warmupOutput().then(async () => {
-        // Pequeño delay extra para que el sink se "asiente" antes de
-        // que arranque la utterance — si arrancamos al toque se pierde
-        // el primer fragmento (sintetizado durante el cambio de ruta).
-        await new Promise((r) => setTimeout(r, 60));
+        u.onstart = () => {
+          speakStartTsRef.current = Date.now();
+          speakActuallyPlayingRef.current = true;
+          if (phaseRef.current !== "voicePaused") {
+            goPhase("speaking");
+            setStatus("Respondiendo…");
+          }
+        };
+        u.onend = () => {
+          // Si fue por nuestro cancel() o pause, no avanzamos.
+          if (isCancelingRef.current) {
+            isCancelingRef.current = false;
+            return;
+          }
+          partIndexRef.current += 1;
+          if (partIndexRef.current < textPartsRef.current.length) {
+            // Pequeño delay entre partes para que el motor respire.
+            setTimeout(() => speakPart(), 40);
+          } else {
+            finishAll("onend (last part)");
+          }
+        };
+        u.onerror = (e) => {
+          if (e.error === "canceled" || e.error === "interrupted") {
+            // No avanzar: el cancel puede venir del pause o de un reinicio.
+            return;
+          }
+          finishAll(`onerror: ${e.error || "unknown"}`);
+        };
+
         try {
           synth.speak(u);
         } catch {
-          finish("speak threw");
+          finishAll("speak threw");
         }
+      };
+      // Expongo speakPart para que onVoiceButton (en el resume) pueda
+      // continuar la cadena con una utterance nueva.
+      speakPartRef.current = speakPart;
+
+      // Warm-up de salida ANTES de pedir al sistema que hable.
+      void warmupOutput().then(async () => {
+        await new Promise((r) => setTimeout(r, 60));
+        speakPart();
       });
 
-      // Watchdog por polling — más confiable que `onboundary` (que en
-      // Samsung Internet / algunos Chromes Android no se dispara).
-      //
-      // Lógica:
-      //  - Si synth.speaking es true, mantenemos la marca interna.
-      //  - Si en 1.5 s seguidos synth.speaking es false pero la fase
-      //    sigue siendo "speaking" → el utterance se cortó sin onend
-      //    y forzamos la finalización.
-      //  - Si pasó más del 200 % de la duración estimada, también
-      //    forzamos (red de seguridad).
+      // Watchdog por polling.
       let consecutiveQuiet = 0;
       speakWatchdogRef.current = setInterval(() => {
         if (phaseRef.current !== "speaking" && phaseRef.current !== "voicePaused") {
@@ -513,7 +553,6 @@ export default function App() {
           return;
         }
         if (userPausedRef.current || synth.paused) {
-          // Pausa del usuario: no matamos.
           consecutiveQuiet = 0;
           return;
         }
@@ -523,25 +562,26 @@ export default function App() {
           consecutiveQuiet = 0;
         } else {
           consecutiveQuiet += 1;
-          // 1.5 s seguidos de silencio → el utterance se cortó.
           if (consecutiveQuiet >= 3) {
             try {
+              isCancelingRef.current = true;
               synth.cancel();
             } catch {
               /* no-op */
             }
-            finish(`watchdog: synth.speaking false ${consecutiveQuiet * 500}ms`);
+            finishAll(`watchdog: synth.speaking false ${consecutiveQuiet * 500}ms`);
             return;
           }
         }
         const elapsed = Date.now() - speakStartTsRef.current;
         if (speakStartTsRef.current > 0 && elapsed > speakEstimatedMsRef.current * 2 + 5000) {
           try {
+            isCancelingRef.current = true;
             synth.cancel();
           } catch {
             /* no-op */
           }
-          finish("watchdog: > 2x estimación");
+          finishAll("watchdog: > 2x estimación");
         }
       }, 500);
     },
@@ -822,17 +862,15 @@ export default function App() {
     }
   }, [goPhase, handleRecorderStopped]);
 
-  /* ============ BOTÓN 3 · PLAY / PAUSA DE LA VOZ ============ */
-
-  /**
-   * Controla la lectura de la respuesta: pausa, reanuda o vuelve a
-   * reproducir desde el inicio si la lectura ya terminó.
+  /* ============ BOTÓN 3 · PLAY / PAUSA DE LA VOZ ============
    *
-   * En Chrome para Android, `synth.resume()` a veces no reactiva el
-   * utterance (la fase pasa a "speaking" pero no sale sonido). Para
-   * esos casos, después de llamar a `resume()` esperamos 200 ms y
-   * verificamos si el utterance realmente está sonando. Si no, hacemos
-   * fallback: cancel() + speak() desde el principio.
+   * Con el chunking por oraciones, el pause/resume es robusto:
+   *  - Pausa: cancela la utterance actual (se pierde la oración en
+   *    curso, pero al ser oraciones cortas es poco). El índice NO
+   *    avanza: al reanudar, repetimos esa misma oración.
+   *  - Play: crea una utterance nueva con la oración actual. No
+   *    dependemos de synth.resume() (que en Chrome Android suele
+   *    dejar la utterance muda).
    */
   const onVoiceButton = useCallback(() => {
     if (!("speechSynthesis" in window)) return;
@@ -840,39 +878,29 @@ export default function App() {
     const p = phaseRef.current;
 
     if (p === "speaking") {
-      synth.pause();
+      // Marcar que el cancel viene de nosotros para que el onend no
+      // avance al siguiente chunk.
+      isCancelingRef.current = true;
       userPausedRef.current = true;
-      goPhase("voicePaused");
-      setStatus("Lectura en pausa");
-    } else if (p === "voicePaused") {
-      // 1) Intentar resume normal.
       try {
-        synth.resume();
+        synth.cancel();
       } catch {
         /* no-op */
       }
+      goPhase("voicePaused");
+      setStatus("Lectura en pausa");
+    } else if (p === "voicePaused") {
+      // Reanudar: el speakPartRef.current() habla el chunk actual con
+      // una utterance NUEVA. No usamos synth.resume() porque en
+      // Chrome Android suele dejar la utterance muda.
       userPausedRef.current = false;
+      isCancelingRef.current = false;
       goPhase("speaking");
       setStatus("Respondiendo…");
-
-      // 2) Watchdog: si a los 200 ms el utterance no está sonando,
-      //    fue un resume fantasma. Reiniciamos desde el principio.
-      setTimeout(() => {
-        if (phaseRef.current !== "speaking") return; // ya cambió de fase
-        if (userPausedRef.current) return; // el usuario volvió a pausar
-        if (synth.speaking) return; // OK, sí está sonando
-        // Fallback: cancelar y reiniciar.
-        try {
-          synth.cancel();
-        } catch {
-          /* no-op */
-        }
-        if (responseRef.current) {
-          speak(responseRef.current);
-        }
-      }, 200);
+      // Pequeño delay para evitar carreras con el cancel anterior.
+      setTimeout(() => speakPartRef.current?.(), 80);
     } else if (responseRef.current) {
-      // Lectura terminada → reproducir de nuevo
+      // Lectura terminada → reproducir de nuevo desde el principio.
       sfx.ready();
       speak(responseRef.current);
     }
