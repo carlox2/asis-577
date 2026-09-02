@@ -493,7 +493,7 @@ export default function App() {
         u.lang = "es-ES";
         const v = pickSpanishVoice(voicesRef.current);
         if (v) u.voice = v;
-        u.rate = 0.9;
+        u.rate = 0.5;
         u.pitch = 1;
         u.volume = 1;
         utterRef.current = u;
