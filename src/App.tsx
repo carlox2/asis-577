@@ -888,17 +888,25 @@ export default function App() {
       goPhase("voicePaused");
       setStatus("Lectura en pausa");
     } else if (p === "voicePaused") {
-      // Reanudar: usa synth.resume() para continuar desde donde se pausó.
-      // No creamos utterance nueva: recoveremos la utterance pausada.
+      // Reanudar: lógica robusta para evitar que se corte la primera palabra.
+      // En lugar de synth.resume() (que en algunos motores de TTS puede
+      // dejar una syllable/gap al reanudar), cancelamos la utterance actual
+      // y reiniciamos el chunk actual desde el principio con
+      // speakPartRef.current(). Esto garantiza que se conserve todo el
+      contenido: el usuario vuelve a escuchar el chunk actual desde su
+      inicio, pero nada se pierde por cortocircuito.
       userPausedRef.current = false;
+      isCancelingRef.current = true; // impedir que onend avance el índice
       goPhase("speaking");
       setStatus("Respondiendo…");
       try {
-        synth.resume();
+        synth.cancel();
       } catch {
-        /* fallback: si resume no funciona, reiniciamos desde el chunk actual */
-        setTimeout(() => speakPartRef.current?.(), 80);
+        /* no-op */
       }
+      // Pequeño delay para que el motor cancela completamente,
+      // luego reiniciamos el chunk actual desde el inicio.
+      setTimeout(() => speakPartRef.current?.(), 80);
     } else if (responseRef.current) {
       // Lectura terminada → reproducir de nuevo desde el principio.
       sfx.ready();
