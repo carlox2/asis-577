@@ -893,8 +893,8 @@ export default function App() {
       // dejar una syllable/gap al reanudar), cancelamos la utterance actual
       // y reiniciamos el chunk actual desde el principio con
       // speakPartRef.current(). Esto garantiza que se conserve todo el
-      contenido: el usuario vuelve a escuchar el chunk actual desde su
-      inicio, pero nada se pierde por cortocircuito.
+      // contenido: el usuario vuelve a escuchar el chunk actual desde su
+      // inicio, pero nada se pierde por cortocircuito.
       userPausedRef.current = false;
       isCancelingRef.current = true; // impedir que onend avance el índice
       goPhase("speaking");
