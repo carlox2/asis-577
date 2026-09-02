@@ -877,33 +877,30 @@ export default function App() {
     const p = phaseRef.current;
 
     if (p === "speaking") {
-      // Marcar que el cancel viene de nosotros para que el onend no
-      // avance al siguiente chunk.
-      isCancelingRef.current = true;
+      // Pausar: usa synth.pause() para congelar la utterance actual
+      // y mantener el posición en el partIndex.
       userPausedRef.current = true;
       try {
-        synth.cancel();
+        synth.pause();
       } catch {
         /* no-op */
       }
       goPhase("voicePaused");
       setStatus("Lectura en pausa");
     } else if (p === "voicePaused") {
-      // Reanudar: el speakPartRef.current() habla el chunk actual con
-      // una utterance NUEVA. No usamos synth.resume() porque en
-      // Chrome Android suele dejar la utterance muda.
+      // Reanudar: usa synth.resume() para continuar desde donde se pausó.
+      // No creamos utterance nueva: recoveremos la utterance pausada.
       userPausedRef.current = false;
-      isCancelingRef.current = false;
       goPhase("speaking");
       setStatus("Respondiendo…");
-      // Pequeño delay para evitar carreras con el cancel anterior.
-      setTimeout(() => speakPartRef.current?.(), 80);
+      try {
+        synth.resume();
+      } catch {
+        /* fallback: si resume no funciona, reiniciamos desde el chunk actual */
+        setTimeout(() => speakPartRef.current?.(), 80);
+      }
     } else if (responseRef.current) {
       // Lectura terminada → reproducir de nuevo desde el principio.
-      // Cleanup agresivo: a veces el speechSynthesis de Chrome deja
-      // una utterance fantasma (sobre todo después de varias pausas)
-      // y la siguiente no se oye aunque la UI diga "Respondiendo…".
-      // Cancelamos de nuevo y esperamos un poco antes de arrancar.
       sfx.ready();
       try {
         synth.cancel();
