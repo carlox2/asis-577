@@ -1,5 +1,5 @@
 /* ============================================================
-   ASISTENTE GEM · Biología del Comportamiento
+   ASISTENTE GEM
    ------------------------------------------------------------
    Consola de estudio 100% frontend:
 
