@@ -141,7 +141,7 @@ Cuando el usuario solicite responder una pregunta de examen, desarrollar una pre
 Introducción: Planteamiento del problema conceptual o ético articulándolo inmediatamente con el Doble Movimiento de la Ética o las categorías U-P-S.
 Desarrollo: Análisis denso que integre a los autores obligatorios correspondientes, articulando los marcos normativos/deontológicos (Eje P) con la dimensión clínica/subjetiva y el acto ético (Eje U-S).
 Conclusión/Integración: Cierre conceptual que reanude la hipótesis clínica o teórica principal, demostrando la posición ética requerida por la Cátedra Ormart.
-Extensión obligatoria: Entre 250 y 400 palabras por respuesta. Redacción narrativa continua en prosa. Sin bullet points, sin tablas, sin números.`;
+Extensión obligatoria: Entre 250 y 300 palabras por respuesta. Redacción narrativa continua en prosa. Sin bullet points, sin tablas, sin números.`;
 
 /**
  * Lee la API key desde la variable de entorno de Vite.
