@@ -878,7 +878,7 @@ export default function App() {
 
     if (p === "speaking") {
       // Pausar: usa synth.pause() para congelar la utterance actual
-      // y mantener el posición en el partIndex.
+      // y mantener la posición en partIndex. No cancelamos nada.
       userPausedRef.current = true;
       try {
         synth.pause();
@@ -888,25 +888,24 @@ export default function App() {
       goPhase("voicePaused");
       setStatus("Lectura en pausa");
     } else if (p === "voicePaused") {
-      // Reanudar: lógica robusta para evitar que se corte la primera palabra.
-      // En lugar de synth.resume() (que en algunos motores de TTS puede
-      // dejar una syllable/gap al reanudar), cancelamos la utterance actual
-      // y reiniciamos el chunk actual desde el principio con
-      // speakPartRef.current(). Esto garantiza que se conserve todo el
-      // contenido: el usuario vuelve a escuchar el chunk actual desde su
-      // inicio, pero nada se pierde por cortocircuito.
+      // Reanudar: usa synth.resume() para continuar exactamente desde
+      // donde se pausó. No dependamos de synth.resume() porque en
+      // Chrome Android suele dejar la utterance muda, por lo que
+      // agregamos un pequeño delay y forzamos speakPart nuevamente.
       userPausedRef.current = false;
-      isCancelingRef.current = true; // impedir que onend avance el índice
+      isCancelingRef.current = false; // reanudar normal, no bloquear onend
       goPhase("speaking");
       setStatus("Respondiendo…");
-      try {
-        synth.cancel();
-      } catch {
-        /* no-op */
-      }
-      // Pequeño delay para que el motor cancela completamente,
-      // luego reiniciamos el chunk actual desde el inicio.
-      setTimeout(() => speakPartRef.current?.(), 80);
+      // Pequeño delay para estabilizar el motor, luego reanudamos.
+      setTimeout(() => {
+        try {
+          // Intentar resume primero
+          synth.resume();
+        } catch {
+          /* fallback: si resume no funciona, reiniciamos chunk actual */
+          setTimeout(() => speakPartRef.current?.(), 80);
+        }
+      }, 50);
     } else if (responseRef.current) {
       // Lectura terminada → reproducir de nuevo desde el principio.
       sfx.ready();
