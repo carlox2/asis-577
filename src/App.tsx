@@ -32,7 +32,6 @@ import {
   SpeakerOnIcon,
   SpeakerOffIcon,
   KeyIcon,
-  NeuronIcon,
   HistoryIcon,
   TrashIcon,
   AlertIcon,
@@ -901,8 +900,17 @@ export default function App() {
       setTimeout(() => speakPartRef.current?.(), 80);
     } else if (responseRef.current) {
       // Lectura terminada → reproducir de nuevo desde el principio.
+      // Cleanup agresivo: a veces el speechSynthesis de Chrome deja
+      // una utterance fantasma (sobre todo después de varias pausas)
+      // y la siguiente no se oye aunque la UI diga "Respondiendo…".
+      // Cancelamos de nuevo y esperamos un poco antes de arrancar.
       sfx.ready();
-      speak(responseRef.current);
+      try {
+        synth.cancel();
+      } catch {
+        /* no-op */
+      }
+      setTimeout(() => speak(responseRef.current), 120);
     }
   }, [goPhase, speak]);
 
@@ -959,20 +967,9 @@ export default function App() {
 
       {/* ---------- Encabezado ---------- */}
       <header className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-4 pb-4 pt-6 sm:px-6">
-        <div className="flex items-center gap-3.5">
-          <span className="grid h-12 w-12 place-items-center rounded-xl border border-[#1e3b41] bg-[#0f2226] text-[#4cc9d4]">
-            <NeuronIcon size={26} />
-          </span>
-          <div>
-            <p className="font-mono-gem text-[10px] uppercase tracking-[0.28em] text-[#8fb0ac]">
-              Consola de estudio · {GEMINI_MODEL}
-            </p>
-            <h1 className="font-display text-lg font-semibold leading-tight text-[#e9f4f1] sm:text-[22px]">
-              Biología del Comportamiento
-              <span className="text-[#4cc9d4]"> — Asistente GEM</span>
-            </h1>
-          </div>
-        </div>
+        <h1 className="font-display text-2xl font-bold tracking-[0.18em] text-[#e9f4f1] sm:text-3xl">
+          ASIST. 90
+        </h1>
         <div className="flex items-center gap-2">
           <span
             className={`hidden items-center gap-1.5 rounded-full border px-3 py-1.5 font-mono-gem text-[10px] uppercase tracking-widest sm:flex ${

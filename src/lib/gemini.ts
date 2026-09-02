@@ -1,35 +1,24 @@
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, ThinkingLevel } from "@google/genai";
 
 export const GEMINI_MODEL = "gemini-3.6-flash";
 
 /**
- * Prompt del sistema. Pensado para una app que se usa de noche con la
- * voz como canal principal: la respuesta se muestra en pantalla Y se lee
- * con speechSynthesis, así que NO puede traer markdown (los asteriscos
- * se leen como "asterisco" y rompen la lectura). También debe mencionar
- * todas las opciones de la pregunta, para que se note si el audio
- * se entendió mal.
+ * Prompt del sistema. Conciso: cuanto más corto, menos latencia.
+ * Reglas críticas:
+ *  - Sin markdown (el TTS lee "asterisco" si encuentra **).
+ *  - Sin ';' como separador (algunos TTS lo leen literal).
+ *  - Mencioná todas las opciones para confirmar que el audio se entendió.
  */
-export const SYSTEM_PROMPT = `Sos un asistente de estudio de Biología del Comportamiento y Psicología. Respondé siempre en español rioplatense, claro y conciso.
+export const SYSTEM_PROMPT = `Asistente de estudio de Biología del Comportamiento y Psicología. Respondé en español rioplatense, claro y conciso.
 
-REGLAS DE FORMATO (obligatorias):
-- Nunca uses markdown ni símbolos de formato. Está prohibido: asteriscos, numeral de encabezado, guiones de lista, comillas tipográficas, backticks y links tipo corchete-paréntesis. Escribí texto plano.
-- No uses punto y coma como separador (algunos TTS lo leen "punto y coma" y es ruidoso). Usá saltos de línea entre secciones.
-- Evitá relleno y frases de cortesía. Respondé solo lo preguntado.
-- Si el audio no se entiende bien, decílo explícitamente en una línea aparte y respondé lo que puedas inferir.
+Sin markdown (prohibido: *, #, -, comillas tipográficas, backticks, links). Sin ';'. Sin relleno.
 
-PREGUNTAS DE OPCIÓN MÚLTIPLE (verdadero o falso, o a b c d):
-Respondé EXACTAMENTE en este formato, un renglón por sección, sin markdown, y mencioná SIEMPRE todas las opciones (incluso las correctas) para confirmar que escuchaste la pregunta completa:
+Opción múltiple (V/F o a b c d) — un renglón por sección, mencioná TODAS las opciones:
+Opción correcta: <letra>) <texto>
+Por qué es la correcta: <1-2 oraciones>
+Por qué no las demás: <letra>): <motivo>. <letra>): <motivo>. <letra>): <motivo>.
 
-Opción correcta: <letra>) <texto de esa opción>
-Por qué es la correcta: <justificación de 1 o 2 oraciones>
-Por qué no las demás: <letra>): <motivo breve en una oración>. <letra>): <motivo breve en una oración>. <letra>): <motivo breve en una oración>.
-
-PREGUNTAS ABIERTAS (explicame X, definí, compará, etc.):
-Respondé en una o dos oraciones directas, texto plano, sin viñetas ni listas.
-
-IDIOMA:
-Español rioplatense (vos, sos, tenés). Si la pregunta está en otro idioma, respondé en español.`;
+Abiertas: una o dos oraciones, sin listas.`;
 
 /**
  * Lee la API key desde la variable de entorno de Vite.
@@ -138,9 +127,17 @@ export async function askGemini(base64Audio: string, mimeType: string, apiKey: s
   ];
   const config = {
     systemInstruction: SYSTEM_PROMPT,
-    // Subimos el techo para que la justificación de las 4 opciones
-    // (3 motivos de "por qué no las demás") no se trunque.
-    maxOutputTokens: 2048,
+    // Bajamos el techo: las respuestas de multiple choice rara vez
+    // superan los 600 tokens, y un techo más bajo = respuesta más
+    // rápida (menos que generar).
+    maxOutputTokens: 1024,
+    // Thinking LOW reduce la latencia drásticamente (sin esto, el
+    // modelo "piensa" mucho antes de empezar a generar texto y
+    // una respuesta puede tardar varios minutos).
+    thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+    // Temperatura baja = respuestas más deterministas y ligeramente
+    // más rápidas (menos sampling).
+    temperature: 0.3,
   };
 
   const MAX_ATTEMPTS = 2;
