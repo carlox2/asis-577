@@ -968,7 +968,7 @@ export default function App() {
       {/* ---------- Encabezado ---------- */}
       <header className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-4 pb-4 pt-6 sm:px-6">
         <h1 className="font-display text-2xl font-bold tracking-[0.18em] text-[#e9f4f1] sm:text-3xl">
-          ASIST. 90
+          ASIST. 577
         </h1>
         <div className="flex items-center gap-2">
           <span
