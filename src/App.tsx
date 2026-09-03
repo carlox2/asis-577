@@ -893,15 +893,22 @@ export default function App() {
       userPausedRef.current = true;
       isCancelingRef.current = true; // onend NO avanza al chunk siguiente
 
-      // Solo guardamos posición si estamos realmente mid-chunk.
-      // Si `synth.speaking` es false, estamos en la ventana de 40ms
-      // entre chunks: al reanudar, seguimos con el siguiente chunk
-      // sin tocar el actual.
+      // Guardamos posición mid-chunk usando onboundary.
+      // Si no hay boundary (ej. Android), usamos tiempo transcurrido como fallback.
+      let savedPos: number | null = null;
       if (synth.speaking && partCharIndexRef.current > 0) {
-        savedCharIndexRef.current = partCharIndexRef.current;
-      } else {
-        savedCharIndexRef.current = null;
+        savedPos = partCharIndexRef.current;
+      } else if (synth.speaking && speakStartTsRef.current > 0) {
+        // Fallback: estimar posición basado en tiempo transcurrido desde onstart.
+        // En español ~13 caracteres por segundo a rate=0.5.
+        const elapsed = Date.now() - speakStartTsRef.current;
+        const estimatedPos = Math.floor(elapsed / 1000 * 13);
+        const partText = textPartsRef.current[partIndexRef.current];
+        if (partText) {
+          savedPos = Math.min(partText.length, Math.max(0, estimatedPos));
+        }
       }
+      savedCharIndexRef.current = savedPos;
 
       try {
         synth.cancel();
@@ -918,7 +925,7 @@ export default function App() {
       // Si guardamos una posición mid-chunk, hacemos slice del chunk
       // actual desde ahí. Reemplazamos el chunk en textPartsRef y
       // speakPart() habla la parte restante desde el principio.
-      if (savedIdx !== null && savedIdx > 0) {
+      if (savedIdx !== null && savedIdx >= 0) {
         const partText = textPartsRef.current[partIndexRef.current];
         if (partText && savedIdx < partText.length) {
           const remaining = partText.slice(savedIdx).trim();
