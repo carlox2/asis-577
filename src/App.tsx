@@ -1,7 +1,7 @@
 /* ============================================================
    ASISTENTE GEM
    ------------------------------------------------------------
-   Consola de estudio 100% frontend:
+   Consola de estudio 100% frontend (paleta violeta):
 
    · Botón 1 (Grabar/Pausar)  → MediaRecorder con pause()/resume(),
      acumula TODO en un único Blob sin importar las pausas.
@@ -21,7 +21,6 @@
    ============================================================ */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ReactNode } from "react";
 import Waveform from "./components/Waveform";
 import type { WaveMode } from "./components/Waveform";
 import {
@@ -37,10 +36,6 @@ import {
   AlertIcon,
   EyeIcon,
   EyeOffIcon,
-  GitBranchIcon,
-  ZapIcon,
-  UploadIcon,
-  GlobeIcon,
 } from "./components/icons";
 import { ensureAudio, sfx, setSfxMuted, SOUND_VOLUME, warmupOutput, setWarmupSinkId } from "./lib/sounds";
 import {
@@ -125,32 +120,6 @@ function pickSpanishVoice(voices: SpeechSynthesisVoice[]): SpeechSynthesisVoice 
 
 /* ---------------- Piezas de UI ---------------- */
 
-/** Aparece suavemente al entrar en el viewport. */
-function Reveal({ children, delay = 0 }: { children: ReactNode; delay?: number }) {
-  const ref = useRef<HTMLDivElement>(null);
-  const [visible, setVisible] = useState(false);
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const io = new IntersectionObserver(
-      (entries) => {
-        if (entries[0]?.isIntersecting) {
-          setVisible(true);
-          io.disconnect();
-        }
-      },
-      { threshold: 0.12 }
-    );
-    io.observe(el);
-    return () => io.disconnect();
-  }, []);
-  return (
-    <div ref={ref} className={`reveal ${visible ? "is-visible" : ""}`} style={{ transitionDelay: `${delay}ms` }}>
-      {children}
-    </div>
-  );
-}
-
 /** Barras animadas visibles mientras la voz está hablando. */
 function Equalizer() {
   return (
@@ -165,23 +134,23 @@ function Equalizer() {
 type Accent = "coral" | "cyan" | "mint" | "amber";
 
 const ACCENT_TEXT: Record<Accent, string> = {
-  coral: "text-[#ff6b5e]",
-  cyan: "text-[#4cc9d4]",
-  mint: "text-[#3ddc97]",
-  amber: "text-[#ffc24b]",
+  coral: "text-[#a78bfa]",
+  cyan: "text-[#e879f9]",
+  mint: "text-[#f0abfc]",
+  amber: "text-[#818cf8]",
 };
 
 /** Punto de estado con color por fase. */
 function StatusDot({ phase }: { phase: Phase }) {
   const map: Record<Phase, { cls: string; color: string }> = {
-    idle: { cls: "", color: "bg-[#8fb0ac]" },
-    starting: { cls: "dot-throb", color: "bg-[#4cc9d4]" },
-    recording: { cls: "dot-blink", color: "bg-[#ff6b5e]" },
-    paused: { cls: "", color: "bg-[#ffc24b]" },
-    sending: { cls: "dot-throb", color: "bg-[#4cc9d4]" },
-    processing: { cls: "dot-throb", color: "bg-[#ffc24b]" },
-    speaking: { cls: "dot-blink", color: "bg-[#3ddc97]" },
-    voicePaused: { cls: "", color: "bg-[#3ddc97]" },
+    idle: { cls: "", color: "bg-[#9b91b8]" },
+    starting: { cls: "dot-throb", color: "bg-[#e879f9]" },
+    recording: { cls: "dot-blink", color: "bg-[#a78bfa]" },
+    paused: { cls: "", color: "bg-[#818cf8]" },
+    sending: { cls: "dot-throb", color: "bg-[#e879f9]" },
+    processing: { cls: "dot-throb", color: "bg-[#818cf8]" },
+    speaking: { cls: "dot-blink", color: "bg-[#f0abfc]" },
+    voicePaused: { cls: "", color: "bg-[#f0abfc]" },
   };
   const { cls, color } = map[phase];
   return <span className={`inline-block h-2.5 w-2.5 rounded-full ${color} ${cls}`} />;
@@ -203,24 +172,24 @@ interface ControlButtonProps {
  */
 function ControlButton({ accent, icon, label, hint, onClick, disabled, active }: ControlButtonProps) {
   const hoverBorder: Record<Accent, string> = {
-    coral: "hover:border-[#ff6b5e]/70 hover:shadow-[0_10px_34px_-14px_rgba(255,107,94,0.55)]",
-    cyan: "hover:border-[#4cc9d4]/70 hover:shadow-[0_10px_34px_-14px_rgba(76,201,212,0.5)]",
-    mint: "hover:border-[#3ddc97]/70 hover:shadow-[0_10px_34px_-14px_rgba(61,220,151,0.5)]",
-    amber: "hover:border-[#ffc24b]/70 hover:shadow-[0_10px_34px_-14px_rgba(255,194,75,0.5)]",
+    coral: "hover:border-[#a78bfa]/70 hover:shadow-[0_10px_34px_-14px_rgba(167,139,250,0.55)]",
+    cyan: "hover:border-[#e879f9]/70 hover:shadow-[0_10px_34px_-14px_rgba(232,121,249,0.5)]",
+    mint: "hover:border-[#f0abfc]/70 hover:shadow-[0_10px_34px_-14px_rgba(240,171,252,0.5)]",
+    amber: "hover:border-[#818cf8]/70 hover:shadow-[0_10px_34px_-14px_rgba(129,140,248,0.5)]",
   };
   return (
     <button
       type="button"
       onClick={onClick}
       disabled={disabled}
-      className={`ctrl-btn relative flex h-24 flex-col items-center justify-center gap-1.5 rounded-xl border bg-[#0f2226] px-2 outline-none sm:h-28 ${
-        active ? "border-[#ff6b5e]/80" : "border-[#1e3b41]"
-      } ${hoverBorder[accent]} focus-visible:ring-2 focus-visible:ring-[#4cc9d4]/60`}
+      className={`ctrl-btn relative flex h-24 flex-col items-center justify-center gap-1.5 rounded-xl border bg-[#15102b] px-2 outline-none sm:h-28 ${
+        active ? "border-[#a78bfa]/80" : "border-[#2d1f55]"
+      } ${hoverBorder[accent]} focus-visible:ring-2 focus-visible:ring-[#e879f9]/60`}
     >
       {active && <span className="rec-pulse pointer-events-none absolute inset-0 rounded-xl" aria-hidden />}
       <span className={ACCENT_TEXT[accent]}>{icon}</span>
-      <span className="text-sm font-semibold tracking-wide text-[#e9f4f1]">{label}</span>
-      <span className="font-mono-gem text-[10px] uppercase tracking-[0.14em] text-[#8fb0ac]">{hint}</span>
+      <span className="text-sm font-semibold tracking-wide text-[#ede9fe]">{label}</span>
+      <span className="font-mono-gem text-[10px] uppercase tracking-[0.14em] text-[#9b91b8]">{hint}</span>
     </button>
   );
 }
@@ -971,15 +940,15 @@ export default function App() {
 
       {/* ---------- Encabezado ---------- */}
       <header className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-4 pb-4 pt-6 sm:px-6">
-        <h1 className="font-display text-2xl font-bold tracking-[0.18em] text-[#e9f4f1] sm:text-3xl">
+        <h1 className="font-display text-2xl font-bold tracking-[0.18em] text-[#ede9fe] sm:text-3xl">
           ASIST. 577
         </h1>
         <div className="flex items-center gap-2">
           <span
             className={`hidden items-center gap-1.5 rounded-full border px-3 py-1.5 font-mono-gem text-[10px] uppercase tracking-widest sm:flex ${
               keyConfigured
-                ? "border-[#3ddc97]/40 text-[#3ddc97]"
-                : "border-[#ffc24b]/50 text-[#ffc24b]"
+                ? "border-[#f0abfc]/40 text-[#f0abfc]"
+                : "border-[#818cf8]/50 text-[#818cf8]"
             }`}
           >
             <KeyIcon size={13} />
@@ -991,7 +960,7 @@ export default function App() {
             onClick={toggleMute}
             title={muted ? "Activar sonidos" : "Silenciar sonidos"}
             aria-label={muted ? "Activar sonidos" : "Silenciar sonidos"}
-            className="ctrl-btn grid h-10 w-10 place-items-center rounded-xl border border-[#1e3b41] bg-[#0f2226] text-[#8fb0ac] hover:border-[#4cc9d4]/60 hover:text-[#e9f4f1]"
+            className="ctrl-btn grid h-10 w-10 place-items-center rounded-xl border border-[#2d1f55] bg-[#15102b] text-[#9b91b8] hover:border-[#e879f9]/60 hover:text-[#ede9fe]"
           >
             {muted ? <SpeakerOffIcon size={19} /> : <SpeakerOnIcon size={19} />}
           </button>
@@ -999,7 +968,7 @@ export default function App() {
       </header>
 
       {/* ---------- FILA DE CONTROLES: 3 botones fijos, siempre iguales ---------- */}
-      <div className="sticky top-0 z-30 border-y border-[#1e3b41] bg-[#0a1619]/85 backdrop-blur-md">
+      <div className="sticky top-0 z-30 border-y border-[#2d1f55] bg-[#0c0a1a]/85 backdrop-blur-md">
         <div className="mx-auto grid max-w-6xl grid-cols-3 gap-2.5 px-4 py-3 sm:gap-3 sm:px-6">
           {/* Botón 1 · Grabar / Pausar / Reanudar */}
           <ControlButton
@@ -1037,46 +1006,46 @@ export default function App() {
         {/* Columna izquierda: consola + respuesta */}
         <div className="flex min-w-0 flex-col gap-4">
           {/* Consola de grabación */}
-          <section className="rounded-xl border border-[#1e3b41] bg-[#0f2226] p-4 sm:p-5">
+          <section className="rounded-xl border border-[#2d1f55] bg-[#15102b] p-4 sm:p-5">
             <div className="mb-3 flex items-center justify-between gap-3">
               <div className="flex items-center gap-2.5">
                 <StatusDot phase={phase} />
-                <p className="text-sm font-medium text-[#e9f4f1]">{status}</p>
+                <p className="text-sm font-medium text-[#ede9fe]">{status}</p>
                 {phase === "speaking" && <Equalizer />}
               </div>
-              <div className="flex items-center gap-3 font-mono-gem text-xs text-[#8fb0ac]">
-                <span className={phase === "recording" ? "text-[#ff6b5e]" : phase === "paused" ? "text-[#ffc24b]" : ""}>
+              <div className="flex items-center gap-3 font-mono-gem text-xs text-[#9b91b8]">
+                <span className={phase === "recording" ? "text-[#a78bfa]" : phase === "paused" ? "text-[#818cf8]" : ""}>
                   {formatTime(elapsed)}
                 </span>
-                <span className="hidden rounded border border-[#1e3b41] px-1.5 py-0.5 text-[10px] sm:inline">
+                <span className="hidden rounded border border-[#2d1f55] px-1.5 py-0.5 text-[10px] sm:inline">
                   {formatBytes(clipBytes)}
                 </span>
               </div>
             </div>
-            <div className="overflow-hidden rounded-lg border border-[#1e3b41]/70 bg-[#0a1619]/70">
+            <div className="overflow-hidden rounded-lg border border-[#2d1f55]/70 bg-[#0c0a1a]/70">
               <Waveform getAnalyser={getAnalyser} mode={waveMode} />
             </div>
-            <div className="mt-3 grid grid-cols-3 gap-2 font-mono-gem text-[10px] uppercase tracking-widest text-[#8fb0ac]">
+            <div className="mt-3 grid grid-cols-3 gap-2 font-mono-gem text-[10px] uppercase tracking-widest text-[#9b91b8]">
               <span>
-                Canal <b className="text-[#e9f4f1]">mic</b>
+                Canal <b className="text-[#ede9fe]">mic</b>
               </span>
               <span className="text-center">
-                Modo <b className="text-[#e9f4f1]">{hasAudio ? "acumular" : "reposo"}</b>
+                Modo <b className="text-[#ede9fe]">{hasAudio ? "acumular" : "reposo"}</b>
               </span>
               <span className="text-right">
-                Clip <b className="text-[#e9f4f1]">{hasAudio ? "abierto" : "—"}</b>
+                Clip <b className="text-[#ede9fe]">{hasAudio ? "abierto" : "—"}</b>
               </span>
             </div>
           </section>
 
           {/* Área de texto: estado + respuesta de la IA */}
-          <section className="flex-1 rounded-xl border border-[#1e3b41] bg-[#0f2226] p-4 sm:p-5">
+          <section className="flex-1 rounded-xl border border-[#2d1f55] bg-[#15102b] p-4 sm:p-5">
             <div className="mb-3 flex items-center justify-between">
-              <h2 className="font-display text-xs font-semibold uppercase tracking-[0.2em] text-[#8fb0ac]">
+              <h2 className="font-display text-xs font-semibold uppercase tracking-[0.2em] text-[#9b91b8]">
                 Respuesta del asistente
               </h2>
               {wordCount > 0 && (
-                <span className="font-mono-gem text-[10px] uppercase tracking-widest text-[#8fb0ac]">
+                <span className="font-mono-gem text-[10px] uppercase tracking-widest text-[#9b91b8]">
                   ≈ {wordCount} palabras
                 </span>
               )}
@@ -1084,7 +1053,7 @@ export default function App() {
 
             {/* Error discreto */}
             {error && (
-              <div className="answer-in mb-3 flex items-start gap-2.5 rounded-lg border border-[#ff6b5e]/40 bg-[#ff6b5e]/10 px-3.5 py-3 text-sm text-[#ffb4ad]">
+              <div className="answer-in mb-3 flex items-start gap-2.5 rounded-lg border border-[#a78bfa]/40 bg-[#a78bfa]/10 px-3.5 py-3 text-sm text-[#d4c5fa]">
                 <AlertIcon size={18} className="mt-0.5 shrink-0" />
                 <p>{error}</p>
               </div>
@@ -1093,20 +1062,20 @@ export default function App() {
             {phase === "processing" || phase === "sending" ? (
               <div className="answer-in space-y-3 py-2">
                 {[92, 100, 78].map((w, i) => (
-                  <div key={i} className="h-3 animate-pulse rounded-full bg-[#122a2f]" style={{ width: `${w}%` }} />
+                  <div key={i} className="h-3 animate-pulse rounded-full bg-[#1c1538]" style={{ width: `${w}%` }} />
                 ))}
-                <p className="pt-1 font-mono-gem text-xs text-[#8fb0ac]">
+                <p className="pt-1 font-mono-gem text-xs text-[#9b91b8]">
                   {phase === "sending" ? "Codificando audio en Base64…" : "Gemini está escuchando tu clip…"}
                 </p>
               </div>
             ) : response ? (
-              <p className="answer-in whitespace-pre-wrap text-[15px] leading-relaxed text-[#e9f4f1]">{response}</p>
+              <p className="answer-in whitespace-pre-wrap text-[15px] leading-relaxed text-[#ede9fe]">{response}</p>
             ) : (
               <div className="py-6 text-center">
-                <p className="mx-auto max-w-md text-sm leading-relaxed text-[#8fb0ac]">
-                  Presiona <b className="text-[#ff6b5e]">Grabar</b> y formula tu pregunta en voz alta. Puedes{" "}
-                  <b className="text-[#ffc24b]">pausar</b> para leer y <b className="text-[#ff6b5e]">reanudar</b>: todo se
-                  acumula en un solo clip. Luego <b className="text-[#4cc9d4]">Envía</b> y escucha la respuesta.
+                <p className="mx-auto max-w-md text-sm leading-relaxed text-[#9b91b8]">
+                  Presiona <b className="text-[#a78bfa]">Grabar</b> y formula tu pregunta en voz alta. Puedes{" "}
+                  <b className="text-[#818cf8]">pausar</b> para leer y <b className="text-[#a78bfa]">reanudar</b>: todo se
+                  acumula en un solo clip. Luego <b className="text-[#e879f9]">Envía</b> y escucha la respuesta.
                 </p>
               </div>
             )}
@@ -1116,23 +1085,23 @@ export default function App() {
         {/* Columna derecha: bitácora + configuración */}
         <div className="flex min-w-0 flex-col gap-4">
           {/* Bitácora de sesión */}
-          <section className="rounded-xl border border-[#1e3b41] bg-[#0f2226] p-4 sm:p-5">
+          <section className="rounded-xl border border-[#2d1f55] bg-[#15102b] p-4 sm:p-5">
             <div className="mb-3 flex items-center justify-between">
-              <h2 className="flex items-center gap-2 font-display text-xs font-semibold uppercase tracking-[0.2em] text-[#8fb0ac]">
+              <h2 className="flex items-center gap-2 font-display text-xs font-semibold uppercase tracking-[0.2em] text-[#9b91b8]">
                 <HistoryIcon size={15} /> Bitácora
               </h2>
               {history.length > 0 && (
                 <button
                   type="button"
                   onClick={() => setHistory([])}
-                  className="ctrl-btn flex items-center gap-1.5 rounded-md border border-[#1e3b41] px-2 py-1 font-mono-gem text-[10px] uppercase tracking-widest text-[#8fb0ac] hover:border-[#ff6b5e]/50 hover:text-[#ff6b5e]"
+                  className="ctrl-btn flex items-center gap-1.5 rounded-md border border-[#2d1f55] px-2 py-1 font-mono-gem text-[10px] uppercase tracking-widest text-[#9b91b8] hover:border-[#a78bfa]/50 hover:text-[#a78bfa]"
                 >
                   <TrashIcon size={12} /> Limpiar
                 </button>
               )}
             </div>
             {history.length === 0 ? (
-              <p className="py-3 text-center font-mono-gem text-xs text-[#8fb0ac]/70">
+              <p className="py-3 text-center font-mono-gem text-xs text-[#9b91b8]/70">
                 Las respuestas de esta sesión aparecerán aquí.
               </p>
             ) : (
@@ -1142,14 +1111,14 @@ export default function App() {
                     <button
                       type="button"
                       onClick={() => playHistoryItem(item)}
-                      className="ctrl-btn w-full rounded-lg border border-[#1e3b41] bg-[#122a2f]/60 px-3 py-2.5 text-left hover:border-[#3ddc97]/50"
+                      className="ctrl-btn w-full rounded-lg border border-[#2d1f55] bg-[#1c1538]/60 px-3 py-2.5 text-left hover:border-[#f0abfc]/50"
                       title="Escuchar de nuevo"
                     >
-                      <span className="flex items-center justify-between font-mono-gem text-[10px] uppercase tracking-widest text-[#3ddc97]">
+                      <span className="flex items-center justify-between font-mono-gem text-[10px] uppercase tracking-widest text-[#f0abfc]">
                         <span>R{history.length - i} · {item.time}</span>
-                        <PlayIcon size={11} className="text-[#8fb0ac]" />
+                        <PlayIcon size={11} className="text-[#9b91b8]" />
                       </span>
-                      <span className="mt-1 line-clamp-2 block text-xs leading-relaxed text-[#cfe0dd]">
+                      <span className="mt-1 line-clamp-2 block text-xs leading-relaxed text-[#d4cce0]">
                         {item.text}
                       </span>
                     </button>
@@ -1160,12 +1129,12 @@ export default function App() {
           </section>
 
           {/* Configuración */}
-          <section className="rounded-xl border border-[#1e3b41] bg-[#0f2226] p-4 sm:p-5">
-            <h2 className="mb-3 flex items-center gap-2 font-display text-xs font-semibold uppercase tracking-[0.2em] text-[#8fb0ac]">
+          <section className="rounded-xl border border-[#2d1f55] bg-[#15102b] p-4 sm:p-5">
+            <h2 className="mb-3 flex items-center gap-2 font-display text-xs font-semibold uppercase tracking-[0.2em] text-[#9b91b8]">
               <KeyIcon size={15} /> Configuración
             </h2>
 
-            <label className="mb-1 block font-mono-gem text-[10px] uppercase tracking-widest text-[#8fb0ac]" htmlFor="gem-mic">
+            <label className="mb-1 block font-mono-gem text-[10px] uppercase tracking-widest text-[#9b91b8]" htmlFor="gem-mic">
               Micrófono de entrada
             </label>
             <div className="mb-2 flex gap-2">
@@ -1178,7 +1147,7 @@ export default function App() {
                   saveInputId(v);
                   setMicDiagnostic("");
                 }}
-                className="min-w-0 flex-1 rounded-lg border border-[#1e3b41] bg-[#0a1619] px-3 py-2 font-mono-gem text-xs text-[#e9f4f1] outline-none transition-colors focus:border-[#4cc9d4]/60"
+                className="min-w-0 flex-1 rounded-lg border border-[#2d1f55] bg-[#0c0a1a] px-3 py-2 font-mono-gem text-xs text-[#ede9fe] outline-none transition-colors focus:border-[#e879f9]/60"
               >
                 <option value="">Predeterminado del sistema</option>
                 {inputDevices.map((d, i) => (
@@ -1198,26 +1167,26 @@ export default function App() {
                     /* no-op */
                   }
                 }}
-                className="ctrl-btn rounded-lg border border-[#1e3b41] bg-[#0a1619] px-3 py-2 text-xs font-semibold text-[#8fb0ac] hover:border-[#4cc9d4]/60 hover:text-[#e9f4f1]"
+                className="ctrl-btn rounded-lg border border-[#2d1f55] bg-[#0c0a1a] px-3 py-2 text-xs font-semibold text-[#9b91b8] hover:border-[#e879f9]/60 hover:text-[#ede9fe]"
                 title="Reescanear dispositivos (útil después de conectar/desconectar USB-C o BT)"
               >
                 Re-escanear
               </button>
             </div>
             {activeMicLabel && (
-              <p className="mb-1 -mt-1 font-mono-gem text-[10px] uppercase tracking-widest text-[#3ddc97]">
+              <p className="mb-1 -mt-1 font-mono-gem text-[10px] uppercase tracking-widest text-[#f0abfc]">
                 ● {activeMicLabel}
               </p>
             )}
             {micDiagnostic && (
-              <p className="mb-2 -mt-1 text-[11px] leading-relaxed text-[#ffc24b]">{micDiagnostic}</p>
+              <p className="mb-2 -mt-1 text-[11px] leading-relaxed text-[#818cf8]">{micDiagnostic}</p>
             )}
-            <p className="mb-3 -mt-1 text-[11px] leading-relaxed text-[#8fb0ac]">
+            <p className="mb-3 -mt-1 text-[11px] leading-relaxed text-[#9b91b8]">
               Si usás un mic corbatero por USB-C o Bluetooth, elegilo acá y presioná
               <b> Re-escanear</b> después de enchufarlo. La próxima grabación lo va a tomar.
             </p>
 
-            <label className="mb-1 block font-mono-gem text-[10px] uppercase tracking-widest text-[#8fb0ac]" htmlFor="gem-out">
+            <label className="mb-1 block font-mono-gem text-[10px] uppercase tracking-widest text-[#9b91b8]" htmlFor="gem-out">
               Salida de audio (auriculares / BT)
             </label>
             <div className="mb-3 flex gap-2">
@@ -1229,7 +1198,7 @@ export default function App() {
                   setSelectedOutputId(v);
                   saveOutputId(v);
                 }}
-                className="min-w-0 flex-1 rounded-lg border border-[#1e3b41] bg-[#0a1619] px-3 py-2 font-mono-gem text-xs text-[#e9f4f1] outline-none transition-colors focus:border-[#4cc9d4]/60"
+                className="min-w-0 flex-1 rounded-lg border border-[#2d1f55] bg-[#0c0a1a] px-3 py-2 font-mono-gem text-xs text-[#ede9fe] outline-none transition-colors focus:border-[#e879f9]/60"
                 title={
                   supportsOutputSelection() || supportsAudioContextSinkId()
                     ? "Cambia la salida de los sonidos de la web y de la voz del asistente"
@@ -1249,18 +1218,18 @@ export default function App() {
                   void warmupOutput();
                   sfx.ready();
                 }}
-                className="ctrl-btn rounded-lg border border-[#3ddc97]/50 bg-[#3ddc97]/10 px-3 py-2 text-xs font-semibold text-[#3ddc97] hover:bg-[#3ddc97]/20"
+                className="ctrl-btn rounded-lg border border-[#f0abfc]/50 bg-[#f0abfc]/10 px-3 py-2 text-xs font-semibold text-[#f0abfc] hover:bg-[#f0abfc]/20"
                 title="Reproduce un sonido corto por el dispositivo elegido"
               >
                 Probar
               </button>
             </div>
-            <p className="mb-4 -mt-2 text-[11px] leading-relaxed text-[#8fb0ac]">
+            <p className="mb-4 -mt-2 text-[11px] leading-relaxed text-[#9b91b8]">
               Seleccioná los auriculares o el dispositivo Bluetooth/USB-C. La voz del
               asistente y los beeps de feedback saldrán por acá.
             </p>
 
-            <label className="mb-1 block font-mono-gem text-[10px] uppercase tracking-widest text-[#8fb0ac]" htmlFor="gem-key">
+            <label className="mb-1 block font-mono-gem text-[10px] uppercase tracking-widest text-[#9b91b8]" htmlFor="gem-key">
               API Key de Gemini
             </label>
             <div className="flex gap-2">
@@ -1271,13 +1240,13 @@ export default function App() {
                   value={keyInput}
                   onChange={(e) => setKeyInput(e.target.value)}
                   placeholder={keyConfigured ? "•••••••• (guardada)" : "Pega tu llave aquí"}
-                  className="w-full rounded-lg border border-[#1e3b41] bg-[#0a1619] px-3 py-2 pr-10 font-mono-gem text-xs text-[#e9f4f1] placeholder:text-[#8fb0ac]/50 outline-none transition-colors focus:border-[#4cc9d4]/60"
+                  className="w-full rounded-lg border border-[#2d1f55] bg-[#0c0a1a] px-3 py-2 pr-10 font-mono-gem text-xs text-[#ede9fe] placeholder:text-[#9b91b8]/50 outline-none transition-colors focus:border-[#e879f9]/60"
                 />
                 <button
                   type="button"
                   onClick={() => setShowKey((s) => !s)}
                   aria-label={showKey ? "Ocultar llave" : "Mostrar llave"}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-[#8fb0ac] hover:text-[#e9f4f1]"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-[#9b91b8] hover:text-[#ede9fe]"
                 >
                   {showKey ? <EyeOffIcon size={16} /> : <EyeIcon size={16} />}
                 </button>
@@ -1285,12 +1254,12 @@ export default function App() {
               <button
                 type="button"
                 onClick={saveKey}
-                className="ctrl-btn rounded-lg border border-[#4cc9d4]/50 bg-[#4cc9d4]/10 px-3.5 py-2 text-xs font-semibold text-[#4cc9d4] hover:bg-[#4cc9d4]/20"
+                className="ctrl-btn rounded-lg border border-[#e879f9]/50 bg-[#e879f9]/10 px-3.5 py-2 text-xs font-semibold text-[#e879f9] hover:bg-[#e879f9]/20"
               >
                 Guardar
               </button>
             </div>
-            <p className={`mt-2 text-[11px] leading-relaxed ${keySavedFlash ? "text-[#3ddc97]" : "text-[#8fb0ac]"}`}>
+            <p className={`mt-2 text-[11px] leading-relaxed ${keySavedFlash ? "text-[#f0abfc]" : "text-[#9b91b8]"}`}>
               {keySavedFlash
                 ? "Llave guardada en este navegador ✓"
                 : keyConfigured
@@ -1299,94 +1268,30 @@ export default function App() {
             </p>
 
             <div className="mt-4 grid grid-cols-2 gap-2">
-              <div className="rounded-lg border border-[#1e3b41] bg-[#122a2f]/60 px-3 py-2.5">
-                <p className="font-mono-gem text-[10px] uppercase tracking-widest text-[#8fb0ac]">Feedback sonoro</p>
-                <button type="button" onClick={toggleMute} className="ctrl-btn mt-1 flex items-center gap-1.5 text-xs font-semibold text-[#e9f4f1]">
-                  {muted ? <SpeakerOffIcon size={14} className="text-[#ff6b5e]" /> : <SpeakerOnIcon size={14} className="text-[#3ddc97]" />}
+              <div className="rounded-lg border border-[#2d1f55] bg-[#1c1538]/60 px-3 py-2.5">
+                <p className="font-mono-gem text-[10px] uppercase tracking-widest text-[#9b91b8]">Feedback sonoro</p>
+                <button type="button" onClick={toggleMute} className="ctrl-btn mt-1 flex items-center gap-1.5 text-xs font-semibold text-[#ede9fe]">
+                  {muted ? <SpeakerOffIcon size={14} className="text-[#a78bfa]" /> : <SpeakerOnIcon size={14} className="text-[#f0abfc]" />}
                   {muted ? "Silenciado" : "Activado"}
                 </button>
               </div>
-              <div className="rounded-lg border border-[#1e3b41] bg-[#122a2f]/60 px-3 py-2.5">
-                <p className="font-mono-gem text-[10px] uppercase tracking-widest text-[#8fb0ac]">Volumen sfx</p>
-                <p className="mt-1 font-mono-gem text-xs font-semibold text-[#ffc24b]">SOUND_VOLUME = {SOUND_VOLUME}</p>
+              <div className="rounded-lg border border-[#2d1f55] bg-[#1c1538]/60 px-3 py-2.5">
+                <p className="font-mono-gem text-[10px] uppercase tracking-widest text-[#9b91b8]">Volumen sfx</p>
+                <p className="mt-1 font-mono-gem text-xs font-semibold text-[#818cf8]">SOUND_VOLUME = {SOUND_VOLUME}</p>
               </div>
             </div>
 
-            <details className="group mt-4 rounded-lg border border-[#1e3b41] bg-[#0a1619]/60">
-              <summary className="cursor-pointer select-none px-3 py-2.5 font-mono-gem text-[10px] uppercase tracking-widest text-[#8fb0ac] transition-colors hover:text-[#e9f4f1]">
+            <details className="group mt-4 rounded-lg border border-[#2d1f55] bg-[#0c0a1a]/60">
+              <summary className="cursor-pointer select-none px-3 py-2.5 font-mono-gem text-[10px] uppercase tracking-widest text-[#9b91b8] transition-colors hover:text-[#ede9fe]">
                 Prompt del sistema ▾
               </summary>
-              <p className="border-t border-[#1e3b41] px-3 py-2.5 text-xs italic leading-relaxed text-[#cfe0dd]">
+              <p className="border-t border-[#2d1f55] px-3 py-2.5 text-xs italic leading-relaxed text-[#d4cce0]">
                 “{SYSTEM_PROMPT}”
               </p>
             </details>
           </section>
         </div>
       </main>
-
-      {/* ---------- Guía de despliegue (3 pasos) ---------- */}
-      <footer className="mx-auto max-w-6xl px-4 pb-10 pt-6 sm:px-6">
-        <Reveal>
-          <div className="rounded-xl border border-[#1e3b41] bg-[#0f2226] p-5 sm:p-6">
-            <div className="mb-4 flex items-center gap-2.5">
-              <GlobeIcon size={18} className="text-[#4cc9d4]" />
-              <h2 className="font-display text-sm font-semibold uppercase tracking-[0.18em] text-[#e9f4f1]">
-                Publicar en GitHub Pages · sin terminal
-              </h2>
-            </div>
-            <ol className="grid gap-3 md:grid-cols-3">
-              <li className="rounded-lg border border-[#1e3b41] bg-[#122a2f]/60 p-4 transition-colors hover:border-[#4cc9d4]/50">
-                <span className="flex items-center gap-2">
-                  <GitBranchIcon size={16} className="text-[#4cc9d4]" />
-                  <span className="font-display text-xs font-semibold text-[#4cc9d4]">1 · Creá el repo</span>
-                </span>
-                <p className="mt-2 text-xs leading-relaxed text-[#cfe0dd]">
-                  Entrá a{" "}
-                  <code className="rounded bg-[#0a1619] px-1.5 py-0.5 font-mono-gem text-[#ffc24b]">github.com/new</code>, poné un
-                  nombre (ej. <code className="rounded bg-[#0a1619] px-1.5 py-0.5 font-mono-gem text-[#ffc24b]">asistente-gem</code>
-                  ), elegí <b>Público</b> y tocá <b>Create repository</b>. No instalás nada.
-                </p>
-              </li>
-              <li className="rounded-lg border border-[#1e3b41] bg-[#122a2f]/60 p-4 transition-colors hover:border-[#3ddc97]/50">
-                <span className="flex items-center gap-2">
-                  <UploadIcon size={16} className="text-[#3ddc97]" />
-                  <span className="font-display text-xs font-semibold text-[#3ddc97]">2 · Subí los archivos</span>
-                </span>
-                <p className="mt-2 text-xs leading-relaxed text-[#cfe0dd]">
-                  En el repo: <b>Add file → Upload files</b>. Arrastrá los archivos del proyecto (
-                  <b>sin</b> <code className="rounded bg-[#0a1619] px-1.5 py-0.5 font-mono-gem text-[#ffc24b]">node_modules</code> ni{" "}
-                  <code className="rounded bg-[#0a1619] px-1.5 py-0.5 font-mono-gem text-[#ffc24b]">dist</code>) y tocá{" "}
-                  <b>Commit changes</b>. El workflow incluido hace que GitHub compile solo.
-                </p>
-              </li>
-              <li className="rounded-lg border border-[#1e3b41] bg-[#122a2f]/60 p-4 transition-colors hover:border-[#ff6b5e]/50">
-                <span className="flex items-center gap-2">
-                  <ZapIcon size={16} className="text-[#ff6b5e]" />
-                  <span className="font-display text-xs font-semibold text-[#ff6b5e]">3 · Activá Pages</span>
-                </span>
-                <p className="mt-2 text-xs leading-relaxed text-[#cfe0dd]">
-                  <b>Settings → Pages</b> y en <b>Source</b> elegí <b>GitHub Actions</b>. Listo: tu consola queda en{" "}
-                  <code className="rounded bg-[#0a1619] px-1.5 py-0.5 font-mono-gem text-[#ffc24b]">usuario.github.io/asistente-gem</code>
-                  .
-                </p>
-              </li>
-            </ol>
-            <div className="mt-4 flex items-start gap-2.5 rounded-lg border border-[#3ddc97]/30 bg-[#3ddc97]/5 px-3.5 py-3">
-              <ZapIcon size={15} className="mt-0.5 shrink-0 text-[#3ddc97]" />
-              <p className="text-xs leading-relaxed text-[#cfe0dd]">
-                <b className="text-[#3ddc97]">Deploy automático:</b> cada vez que subas un archivo modificado, GitHub recompila y
-                republica solo en ~1 minuto (lo ves en la pestaña <b>Actions</b> del repo). El paso 3 se hace una única vez.
-              </p>
-            </div>
-            <p className="mt-4 font-mono-gem text-[10px] uppercase tracking-widest text-[#8fb0ac]/70">
-              100% frontend · sin comandos · GitHub Actions compila por vos
-            </p>
-          </div>
-        </Reveal>
-        <p className="mt-5 text-center font-mono-gem text-[10px] uppercase tracking-[0.2em] text-[#8fb0ac]/60">
-          Asistente GEM · herramienta personal de estudio
-        </p>
-      </footer>
     </div>
   );
 }

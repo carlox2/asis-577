@@ -57,7 +57,7 @@ export default function Waveform({ getAnalyser, mode }: Props) {
       g.clearRect(0, 0, w, h);
 
       // Línea media de referencia
-      g.strokeStyle = "rgba(233,244,241,0.07)";
+      g.strokeStyle = "rgba(237,233,254,0.07)";
       g.lineWidth = 1;
       g.beginPath();
       g.moveTo(0, h / 2);
@@ -70,9 +70,9 @@ export default function Waveform({ getAnalyser, mode }: Props) {
         frozen = null;
         // Tres ondas lentas superpuestas: la consola en reposo
         const layers = [
-          { amp: h * 0.16, speed: 0.00045, k: 0.012, color: "rgba(76,201,212,0.4)" },
-          { amp: h * 0.1, speed: -0.0007, k: 0.02, color: "rgba(61,220,151,0.3)" },
-          { amp: h * 0.06, speed: 0.0011, k: 0.032, color: "rgba(255,194,75,0.22)" },
+          { amp: h * 0.16, speed: 0.00045, k: 0.012, color: "rgba(232,121,249,0.42)" },
+          { amp: h * 0.1, speed: -0.0007, k: 0.02, color: "rgba(240,171,252,0.32)" },
+          { amp: h * 0.06, speed: 0.0011, k: 0.032, color: "rgba(129,140,248,0.24)" },
         ];
         layers.forEach((L) => {
           g.beginPath();
@@ -95,14 +95,14 @@ export default function Waveform({ getAnalyser, mode }: Props) {
         const buf = new Uint8Array(analyser.fftSize);
         analyser.getByteTimeDomainData(buf);
         frozen = buf;
-        // Halo suave + trazo principal en coral
-        drawTrace(buf, w, h, "rgba(255,107,94,0.22)", 5);
-        drawTrace(buf, w, h, "rgba(255,138,122,0.95)", 1.8);
+        // Halo suave + trazo principal en violeta
+        drawTrace(buf, w, h, "rgba(167,139,250,0.24)", 5);
+        drawTrace(buf, w, h, "rgba(196,181,253,0.95)", 1.8);
       } else if (frozen) {
-        // Pausa: fotograma congelado, atenuado en ámbar
-        drawTrace(frozen, w, h, "rgba(255,194,75,0.4)", 1.6);
+        // Pausa: fotograma congelado, atenuado en índigo
+        drawTrace(frozen, w, h, "rgba(129,140,248,0.4)", 1.6);
       } else {
-        g.strokeStyle = "rgba(255,194,75,0.3)";
+        g.strokeStyle = "rgba(129,140,248,0.3)";
         g.beginPath();
         g.moveTo(0, h / 2);
         g.lineTo(w, h / 2);

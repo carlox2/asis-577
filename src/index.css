@@ -2,21 +2,22 @@
 
 /* ============================================================
    Asistente GEM · Hoja de estilos base
-   Paleta "laboratorio bioluminiscente": petróleo profundo con
-   coral (grabación), menta (voz), ámbar (pausa/proceso) y cian (envío).
+   Paleta "noche violeta": petróleo profundo con tinte violeta,
+   violeta real (grabación), fuchsia (voz), índigo (pausa) y
+   fuchsia brillante (envío). Todo vira al violeta.
    ============================================================ */
 
 :root {
-  --bg: #0a1619;
-  --panel: #0f2226;
-  --panel-2: #122a2f;
-  --line: #1e3b41;
-  --ink: #e9f4f1;
-  --mut: #8fb0ac;
-  --coral: #ff6b5e;
-  --mint: #3ddc97;
-  --amber: #ffc24b;
-  --cyan: #4cc9d4;
+  --bg: #0c0a1a;
+  --panel: #15102b;
+  --panel-2: #1c1538;
+  --line: #2d1f55;
+  --ink: #ede9fe;
+  --mut: #9b91b8;
+  --violet: #a78bfa;
+  --fuchsia: #f0abfc;
+  --indigo: #818cf8;
+  --pink: #e879f9;
 }
 
 html,
@@ -37,21 +38,21 @@ body {
 }
 
 ::selection {
-  background: rgba(76, 201, 212, 0.35);
-  color: #eafcff;
+  background: rgba(232, 121, 249, 0.32);
+  color: #fdf4ff;
 }
 
 /* Scrollbar discreto */
 * {
   scrollbar-width: thin;
-  scrollbar-color: #24464d transparent;
+  scrollbar-color: #2a1f55 transparent;
 }
 *::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 *::-webkit-scrollbar-thumb {
-  background: #24464d;
+  background: #2a1f55;
   border-radius: 8px;
 }
 
@@ -62,9 +63,9 @@ body {
   z-index: -1;
   overflow: hidden;
   background:
-    radial-gradient(1100px 600px at 12% -8%, rgba(76, 201, 212, 0.09), transparent 60%),
-    radial-gradient(900px 560px at 92% 108%, rgba(255, 107, 94, 0.07), transparent 60%),
-    radial-gradient(700px 420px at 70% 20%, rgba(61, 220, 151, 0.05), transparent 60%),
+    radial-gradient(1100px 600px at 12% -8%, rgba(232, 121, 249, 0.10), transparent 60%),
+    radial-gradient(900px 560px at 92% 108%, rgba(167, 139, 250, 0.10), transparent 60%),
+    radial-gradient(700px 420px at 70% 20%, rgba(129, 140, 248, 0.06), transparent 60%),
     var(--bg);
 }
 .gem-bg::before {
@@ -72,8 +73,8 @@ body {
   position: absolute;
   inset: 0;
   background-image:
-    linear-gradient(rgba(233, 244, 241, 0.028) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(233, 244, 241, 0.028) 1px, transparent 1px);
+    linear-gradient(rgba(237, 233, 254, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(237, 233, 254, 0.03) 1px, transparent 1px);
   background-size: 44px 44px;
   mask-image: radial-gradient(ellipse 90% 80% at 50% 20%, #000 40%, transparent 100%);
 }
@@ -81,7 +82,7 @@ body {
   position: absolute;
   border-radius: 9999px;
   filter: blur(70px);
-  opacity: 0.5;
+  opacity: 0.55;
   animation: drift 26s ease-in-out infinite alternate;
 }
 .gem-bg .drift-a {
@@ -89,14 +90,14 @@ body {
   height: 480px;
   left: -140px;
   top: -160px;
-  background: rgba(76, 201, 212, 0.1);
+  background: rgba(232, 121, 249, 0.14);
 }
 .gem-bg .drift-b {
   width: 420px;
   height: 420px;
   right: -120px;
   bottom: -140px;
-  background: rgba(255, 107, 94, 0.09);
+  background: rgba(167, 139, 250, 0.13);
   animation-delay: -12s;
 }
 @keyframes drift {
@@ -108,9 +109,9 @@ body {
 
 /* Anillo de grabación activa: brillo suave que respira (Botón 1) */
 @keyframes rec-pulse {
-  0%   { box-shadow: 0 0 0 0 rgba(255, 107, 94, 0.4); }
-  70%  { box-shadow: 0 0 0 14px rgba(255, 107, 94, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(255, 107, 94, 0); }
+  0%   { box-shadow: 0 0 0 0 rgba(167, 139, 250, 0.45); }
+  70%  { box-shadow: 0 0 0 14px rgba(167, 139, 250, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(167, 139, 250, 0); }
 }
 .rec-pulse {
   animation: rec-pulse 1.6s ease-out infinite;
@@ -137,7 +138,7 @@ body {
   display: inline-block;
   width: 3px;
   border-radius: 2px;
-  background: var(--mint);
+  background: var(--fuchsia);
   animation: eq 1s ease-in-out infinite;
 }
 @keyframes eq {
