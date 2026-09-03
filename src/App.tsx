@@ -909,12 +909,13 @@ export default function App() {
         savedPos = partCharIndexRef.current;
       } else if (synth.speaking && speakStartTsRef.current > 0) {
         // Fallback: estimar posición basado en tiempo transcurrido desde onstart.
-        // En español ~13 caracteres por segundo a rate=0.5.
+        // La utterance habla a rate=0.5, por lo que ~7 chars/seg en español
+        // (13 chars/seg a rate=0.9 * 0.5/0.9 ≈ 7.2).
         const elapsed = Date.now() - speakStartTsRef.current;
-        const estimatedPos = Math.floor(elapsed / 1000 * 13);
+        const estimatedPos = Math.floor(elapsed / 1000 * 7);
         const partText = textPartsRef.current[partIndexRef.current];
         if (partText) {
-          savedPos = Math.min(partText.length, Math.max(0, estimatedPos));
+          savedPos = Math.min(partText.length - 1, Math.max(0, estimatedPos));
         }
       }
       savedCharIndexRef.current = savedPos;
