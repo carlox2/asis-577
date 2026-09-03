@@ -395,6 +395,14 @@ export default function App() {
   const textPartsRef = useRef<string[]>([]);
   /** Índice del trozo que se está hablando o se va a hablar. */
   const partIndexRef = useRef(0);
+  /** Posición (en caracteres) dentro del chunk actual. Se actualiza
+   *  con cada `onboundary`. Se resetea a 0 al arrancar cada chunk.
+   *  En Android Chrome/Brave los boundaries suelen ser por oración
+   *  (no por palabra), así que la granularidad es ~oración. */
+  const partCharIndexRef = useRef(0);
+  /** Posición guardada al pausar, para reanudar desde ahí (slice del
+   *  texto del chunk actual). null si pausamos entre chunks. */
+  const savedCharIndexRef = useRef<number | null>(null);
   /** true cuando hicimos synth.cancel() nosotros; el onend no debe
    *  avanzar al siguiente chunk en ese caso. */
   const isCancelingRef = useRef(false);
@@ -418,6 +426,8 @@ export default function App() {
       speakActuallyPlayingRef.current = false;
       userPausedRef.current = false;
       isCancelingRef.current = false;
+      partCharIndexRef.current = 0;
+      savedCharIndexRef.current = null;
 
       // Troceamos por oraciones (después de '.', '!', '?', o salto de
       // línea). Cada trozo es una utterance aparte, así el pause/resume
@@ -458,6 +468,7 @@ export default function App() {
         }
         // Si el usuario pausó o cancelamos, no seguimos.
         if (phaseRef.current === "idle" || userPausedRef.current) return;
+        partCharIndexRef.current = 0; // reset al arrancar cada chunk
         const partText = textPartsRef.current[partIndexRef.current];
         const u = new SpeechSynthesisUtterance(partText);
         u.lang = "es-ES";
@@ -476,6 +487,16 @@ export default function App() {
             setStatus("Respondiendo…");
           }
         };
+        // onboundary: el motor nos avisa en qué posición del texto
+        // estamos (frontera de palabra/oración). Guardamos el último
+        // charIndex para usarlo al reanudar: hacemos slice del chunk
+        // desde acá y re-hablamos solo la parte restante, en vez de
+        // reiniciar el chunk desde el principio.
+        u.onboundary = (ev) => {
+          if (typeof ev.charIndex === "number" && ev.charIndex >= 0) {
+            partCharIndexRef.current = ev.charIndex;
+          }
+        };
         u.onend = () => {
           // Si fue por nuestro cancel() o pause, no avanzamos.
           if (isCancelingRef.current) {
@@ -492,7 +513,10 @@ export default function App() {
         };
         u.onerror = (e) => {
           if (e.error === "canceled" || e.error === "interrupted") {
-            // No avanzar: el cancel puede venir del pause o de un reinicio.
+            // El motor disparó onerror en vez de onend para el cancel.
+            // Consumimos el flag de cancelación para que la nueva
+            // utterance (creada por el resume) pueda avanzar su onend.
+            isCancelingRef.current = false;
             return;
           }
           finishAll(`onerror: ${e.error || "unknown"}`);
@@ -840,20 +864,24 @@ export default function App() {
 
   /* ============ BOTÓN 3 · PLAY / PAUSA DE LA VOZ ============
    *
-   * Con chunking por oraciones + cancel + replay, pause/resume es
-   * robusto en TODOS los navegadores (incluido Brave/Chrome en
-   * Android, donde `synth.pause()/resume()` deja la utterance muda
-   * o no responde). Decisiones:
+   * Decisión clave para Android (Brave/Chrome), donde
+   * `synth.pause()`/`synth.resume()` deja la utterance muda:
    *
-   *  - Pausa: NO usamos `synth.pause()` (en S25 Ultra + Brave el
-   *    resume no la despierta). En su lugar, `synth.cancel()` y
-   *    marcamos `isCancelingRef.current = true` para que el `onend`
-   *    NO avance al siguiente chunk.
+   *  - Pausa: `synth.cancel()` + guardamos el charIndex del último
+   *    `onboundary` (la posición dentro del chunk actual). Marcamos
+   *    `isCancelingRef.current = true` para que el `onend` no
+   *    avance al siguiente chunk.
    *
-   *  - Reanudar: re-hablamos el chunk actual desde el principio
-   *    (`speakPartRef.current?.()`), NO `synth.resume()`. Perdemos
-   *    la posición dentro de la oración en curso, pero los chunks
-   *    son cortos (1 oración) así que el salto es mínimo.
+   *  - Reanudar: NO usamos `synth.resume()`. En su lugar, hacemos
+   *    `text.slice(savedCharIndex)` del chunk actual, reemplazamos
+   *    el chunk en `textPartsRef` y re-hablamos desde ahí con
+   *    `speakPartRef`. La lectura continúa desde la última frontera
+   *    de palabra/oración, no desde el principio.
+   *
+   * Si pausamos ENTRE chunks (entre onend de uno y onstart del
+   * siguiente, ventana de 40ms), `synth.speaking` es false y NO
+   * guardamos charIndex: el resume sigue normalmente con el chunk
+   * que viene.
    */
   const onVoiceButton = useCallback(() => {
     if (!("speechSynthesis" in window)) return;
@@ -861,11 +889,20 @@ export default function App() {
     const p = phaseRef.current;
 
     if (p === "speaking") {
-      // PAUSA: cancelamos la utterance actual.
-      // `synth.pause()` está descartado: en Android Brave/Chrome
-      // deja la utterance muda y `synth.resume()` no la despierta.
+      // PAUSA
       userPausedRef.current = true;
       isCancelingRef.current = true; // onend NO avanza al chunk siguiente
+
+      // Solo guardamos posición si estamos realmente mid-chunk.
+      // Si `synth.speaking` es false, estamos en la ventana de 40ms
+      // entre chunks: al reanudar, seguimos con el siguiente chunk
+      // sin tocar el actual.
+      if (synth.speaking && partCharIndexRef.current > 0) {
+        savedCharIndexRef.current = partCharIndexRef.current;
+      } else {
+        savedCharIndexRef.current = null;
+      }
+
       try {
         synth.cancel();
       } catch {
@@ -874,13 +911,37 @@ export default function App() {
       goPhase("voicePaused");
       setStatus("Lectura en pausa");
     } else if (p === "voicePaused") {
-      // RESUME: re-hablamos el chunk actual desde el principio.
-      // Pequeño delay para que el motor libere la utterance anterior
-      // antes de encolar la nueva.
+      // RESUME
+      const savedIdx = savedCharIndexRef.current;
+      savedCharIndexRef.current = null;
+
+      // Si guardamos una posición mid-chunk, hacemos slice del chunk
+      // actual desde ahí. Reemplazamos el chunk en textPartsRef y
+      // speakPart() habla la parte restante desde el principio.
+      if (savedIdx !== null && savedIdx > 0) {
+        const partText = textPartsRef.current[partIndexRef.current];
+        if (partText && savedIdx < partText.length) {
+          const remaining = partText.slice(savedIdx).trim();
+          if (remaining) {
+            textPartsRef.current = [
+              ...textPartsRef.current.slice(0, partIndexRef.current),
+              remaining,
+              ...textPartsRef.current.slice(partIndexRef.current + 1),
+            ];
+          }
+        }
+      }
+
       userPausedRef.current = false;
-      isCancelingRef.current = false; // onend ahora sí puede avanzar
+      // NO reseteamos isCancelingRef aquí: el onend de la utterance
+      // vieja (la que cancelamos en la pausa) va a dispararse apenas
+      // el motor procese el cancel, y necesita ver isCancelingRef=true
+      // para devolver sin avanzar. Si lo resetamos antes, podría leer
+      // false, avanzar partIndexRef y romper la cadena.
       goPhase("speaking");
       setStatus("Respondiendo…");
+      // Pequeño delay para que el motor libere la utterance cancelada
+      // antes de encolar la nueva.
       setTimeout(() => speakPartRef.current?.(), 120);
     } else if (responseRef.current) {
       // Lectura terminada → reproducir de nuevo desde el principio.
