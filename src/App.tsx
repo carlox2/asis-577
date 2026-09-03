@@ -45,6 +45,7 @@ import {
   GEMINI_MODEL,
   SYSTEM_PROMPT,
   pickMimeType,
+  sanitizeResponseText,
 } from "./lib/gemini";
 import {
   type AudioDevice,
@@ -779,10 +780,17 @@ export default function App() {
       if (effectiveKey === "TU_API_KEY_AQUI") {
         throw new Error("Configura tu API Key de Gemini en el panel de Configuración.");
       }
-      const text = await askGemini(base64, mimeRef.current, effectiveKey);
+      const rawText = await askGemini(base64, mimeRef.current, effectiveKey);
 
       if (thinkRef.current) clearInterval(thinkRef.current);
       thinkRef.current = null;
+
+      // Gemini a veces devuelve marcas de tiempo tipo transcripción
+      // (00:05, [00:05], rangos SRT, etiquetas "Speaker 1:"). El system
+      // prompt lo prohíbe pero el modelo a veces se "contagia" del audio
+      // de entrada. La función sanitizeResponseText() los limpia como
+      // red de seguridad antes de mostrar/leer el texto.
+      const text = sanitizeResponseText(rawText);
 
       responseRef.current = text;
       setResponse(text);
@@ -832,13 +840,20 @@ export default function App() {
 
   /* ============ BOTÓN 3 · PLAY / PAUSA DE LA VOZ ============
    *
-   * Con el chunking por oraciones, el pause/resume es robusto:
-   *  - Pausa: cancela la utterance actual (se pierde la oración en
-   *    curso, pero al ser oraciones cortas es poco). El índice NO
-   *    avanza: al reanudar, repetimos esa misma oración.
-   *  - Play: crea una utterance nueva con la oración actual. No
-   *    dependemos de synth.resume() (que en Chrome Android suele
-   *    dejar la utterance muda).
+   * Con chunking por oraciones + cancel + replay, pause/resume es
+   * robusto en TODOS los navegadores (incluido Brave/Chrome en
+   * Android, donde `synth.pause()/resume()` deja la utterance muda
+   * o no responde). Decisiones:
+   *
+   *  - Pausa: NO usamos `synth.pause()` (en S25 Ultra + Brave el
+   *    resume no la despierta). En su lugar, `synth.cancel()` y
+   *    marcamos `isCancelingRef.current = true` para que el `onend`
+   *    NO avance al siguiente chunk.
+   *
+   *  - Reanudar: re-hablamos el chunk actual desde el principio
+   *    (`speakPartRef.current?.()`), NO `synth.resume()`. Perdemos
+   *    la posición dentro de la oración en curso, pero los chunks
+   *    son cortos (1 oración) así que el salto es mínimo.
    */
   const onVoiceButton = useCallback(() => {
     if (!("speechSynthesis" in window)) return;
@@ -846,35 +861,27 @@ export default function App() {
     const p = phaseRef.current;
 
     if (p === "speaking") {
-      // Pausar: usa synth.pause() para congelar la utterance actual
-      // y mantener la posición en partIndex. No cancelamos nada.
+      // PAUSA: cancelamos la utterance actual.
+      // `synth.pause()` está descartado: en Android Brave/Chrome
+      // deja la utterance muda y `synth.resume()` no la despierta.
       userPausedRef.current = true;
+      isCancelingRef.current = true; // onend NO avanza al chunk siguiente
       try {
-        synth.pause();
+        synth.cancel();
       } catch {
         /* no-op */
       }
       goPhase("voicePaused");
       setStatus("Lectura en pausa");
     } else if (p === "voicePaused") {
-      // Reanudar: usa synth.resume() para continuar exactamente desde
-      // donde se pausó. No dependamos de synth.resume() porque en
-      // Chrome Android suele dejar la utterance muda, por lo que
-      // agregamos un pequeño delay y forzamos speakPart nuevamente.
+      // RESUME: re-hablamos el chunk actual desde el principio.
+      // Pequeño delay para que el motor libere la utterance anterior
+      // antes de encolar la nueva.
       userPausedRef.current = false;
-      isCancelingRef.current = false; // reanudar normal, no bloquear onend
+      isCancelingRef.current = false; // onend ahora sí puede avanzar
       goPhase("speaking");
       setStatus("Respondiendo…");
-      // Pequeño delay para estabilizar el motor, luego reanudamos.
-      setTimeout(() => {
-        try {
-          // Intentar resume primero
-          synth.resume();
-        } catch {
-          /* fallback: si resume no funciona, reiniciamos chunk actual */
-          setTimeout(() => speakPartRef.current?.(), 80);
-        }
-      }, 50);
+      setTimeout(() => speakPartRef.current?.(), 120);
     } else if (responseRef.current) {
       // Lectura terminada → reproducir de nuevo desde el principio.
       sfx.ready();
@@ -907,10 +914,13 @@ export default function App() {
 
   const playHistoryItem = useCallback(
     (item: HistoryItem) => {
-      responseRef.current = item.text;
-      setResponse(item.text);
+      // Sanitiza por si el item es antiguo (guardado antes del fix
+      // que limpia timecodes de la transcripción).
+      const clean = sanitizeResponseText(item.text);
+      responseRef.current = clean;
+      setResponse(clean);
       sfx.ready();
-      speak(item.text);
+      speak(clean);
     },
     [speak]
   );

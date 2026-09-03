@@ -41,6 +41,7 @@ RESTRICCIONES FORMATIVAS ESTRICTAS:
 PROHIBIDO el uso de viñetas, guiones, listas numeradas o bullet points en las explicaciones de examen.
 PROHIBIDO el uso de cuadros o tablas.
 El texto debe redactarse exclusivamente en párrafos narrativos en prosa continua de alta densidad conceptual.
+PROHIBIDO incluir marcas de tiempo, timecodes, sellos tipo "00:05", rangos tipo "00:05 --> 00:08", subtítulos SRT/VTT, etiquetas de hablante ("Speaker 1:", "Hablante 2:") o cualquier residuo del formato de transcripción del audio. La salida es prosa limpia pensada para ser leída en voz alta por un TTS, no una transcripción con timestamps. NO transcribas el audio de entrada: interpretalo y respondé únicamente con la prosa solicitada.
 
 REGLA DE ORO - PROHIBICIÓN DE PREGUNTAS RETÓRICAS EN RESPUESTAS MODELO:
 Cuando el usuario solicite explícitamente una "respuesta modelo", "respuesta para él", "dame una respuesta para...", "qué le digo", "cómo respondo" o similares, está terminantemente prohibido:
@@ -179,6 +180,46 @@ export function blobToBase64(blob: Blob): Promise<string> {
     reader.onerror = () => reject(new Error("No se pudo codificar el audio a Base64."));
     reader.readAsDataURL(blob);
   });
+}
+
+/**
+ * Limpia el texto que devuelve Gemini antes de mostrarlo o leerlo en voz
+ * alta. Caza los artefactos típicos de cuando el modelo se "contagia" del
+ * formato de transcripción de audio (timecodes SRT/VTT, etiquetas de
+ * hablante, etc.). Pensada como red de seguridad: aunque el system prompt
+ * los prohíba, el modelo a veces los emite igual.
+ *
+ * Patrones que elimina:
+ *  - Sello MM:SS o HH:MM:SS pegado o suelto:           00:05 · 1:23 · 00:05.123
+ *  - Con corchetes / ángulos / paréntesis:              [00:05] · <00:05> · (00:05)
+ *  - Rangos SRT/VTT:                                    00:05 --> 00:08 · 00:05,000 --> 00:08,000
+ *  - Etiquetas de hablante:                             Speaker 1: · Hablante 2:
+ *  - Líneas que son solo un número (índices SRT)
+ */
+export function sanitizeResponseText(text: string): string {
+  if (!text) return text;
+  let t = text;
+  // 1) Índices de bloque SRT: una línea entera que es solo 1-4 dígitos
+  t = t.replace(/^\s*\d{1,4}\s*$/gm, "");
+  // 2) Rangos SRT/VTT: "00:05 --> 00:08" / "00:05,000 --> 00:08,000"
+  t = t.replace(
+    /\b\d{1,2}:\d{2}(?:[.,]\d{1,3})?\s*-->\s*\d{1,2}:\d{2}(?:[.,]\d{1,3})?\b/g,
+    " "
+  );
+  // 3) Sellos de tiempo con corchetes/ángulos/paréntesis: [00:05], <1:23>
+  t = t.replace(
+    /[\[\<\(]\s*\b\d{1,2}:\d{2}(?::\d{2})?(?:[.,]\d{1,3})?\b\s*[\]\>\)]/g,
+    " "
+  );
+  // 4) Sellos sueltos: 00:05, 1:23, 00:05.123 (incluye HH:MM:SS)
+  t = t.replace(/\b\d{1,2}:\d{2}(?::\d{2})?(?:[.,]\d{1,3})?\b/g, " ");
+  // 5) Etiquetas de hablante: "Speaker 1:", "Hablante 2]", "Speaker1 -"
+  t = t.replace(/\b(?:Speaker|Hablante|Unknown)\s*\d+\s*[:\-\]]\s*/gi, " ");
+  // 6) Limpieza: colapsa espacios y saltos de línea sobrantes
+  t = t.replace(/[ \t]{2,}/g, " ");
+  t = t.replace(/[ \t]+\n/g, "\n");
+  t = t.replace(/\n{3,}/g, "\n\n");
+  return t.trim();
 }
 
 /** Extrae un mensaje legible de un error arbitrario (incluido el del SDK). */
