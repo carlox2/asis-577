@@ -896,33 +896,36 @@ export default function App() {
     const p = phaseRef.current;
 
     if (p === "speaking") {
-      // PAUSA: solicitamos pause pero esperamos el boundary de palabra natural
-      // antes de cancelar, para que la palabra en curso se escuche completa.
+      // PAUSA: guardamos la posición del carácter.
+      // Si hay evento onboundary, partCharIndexRef.current ya tiene la posición
+      // exacta del límite de palabra. Si no (Android), usamos tiempo transcurrido
+      // como fallback: ~13 chars/seg a rate=0.5 en español.
       userPausedRef.current = true;
       isCancelingRef.current = true; // onend NO avanza al chunk siguiente
 
-      // Flags para coordinar pause con onboundary
-      pauseRequestedRef.current = true;
+      // Guardamos posición mid-chunk usando onboundary + fallback de tiempo.
+      let savedPos: number | null = null;
+      if (synth.speaking && partCharIndexRef.current > 0) {
+        savedPos = partCharIndexRef.current;
+      } else if (synth.speaking && speakStartTsRef.current > 0) {
+        // Fallback: estimar posición basado en tiempo transcurrido desde onstart.
+        // En español ~13 caracteres por segundo a rate=0.5.
+        const elapsed = Date.now() - speakStartTsRef.current;
+        const estimatedPos = Math.floor(elapsed / 1000 * 13);
+        const partText = textPartsRef.current[partIndexRef.current];
+        if (partText) {
+          savedPos = Math.min(partText.length, Math.max(0, estimatedPos));
+        }
+      }
+      savedCharIndexRef.current = savedPos;
 
-      // NO cancelamos de inmediato: esperaremos el próximo onboundary
-      // para cortar justo después de terminar la palabra actual.
+      try {
+        synth.cancel();
+      } catch {
+        /* no-op */
+      }
       goPhase("voicePaused");
       setStatus("Lectura en pausa");
-
-      // Fallback por si onboundary no dispara (últimas muy cortas).
-      // Cancelamos después de 2s como máximo para no quedarnos colgados.
-      const pauseTimeout = setTimeout(() => {
-        if (pauseRequestedRef.current) {
-          pauseRequestedRef.current = false;
-          try {
-            synth.cancel();
-          } catch {
-            /* no-op */
-          }
-        }
-      }, 2000);
-      // Limpiamos el timeout si onboundary cancela antes.
-      // Se hará en el propio onboundary al setear pauseRequestedRef = false.
     } else if (p === "voicePaused") {
       // RESUME
       const savedIdx = savedCharIndexRef.current;
