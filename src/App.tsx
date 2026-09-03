@@ -239,6 +239,7 @@ export default function App() {
   const elapsedRef = useRef(0);
   const responseRef = useRef("");
   const userPausedRef = useRef(false);
+  const pauseRequestedRef = useRef(false);
   const utterRef = useRef<SpeechSynthesisUtterance | null>(null);
   const keyRef = useRef(savedKey);
   const voicesRef = useRef<SpeechSynthesisVoice[]>([]);
@@ -495,6 +496,12 @@ export default function App() {
         u.onboundary = (ev) => {
           if (typeof ev.charIndex === "number" && ev.charIndex >= 0) {
             partCharIndexRef.current = ev.charIndex;
+          }
+          // Si se solicitó pause, cancelamos justo después de terminar
+          // la palabra actual, para que se escuche completa antes de pausar.
+          if (pauseRequestedRef.current && synth.speaking) {
+            synth.cancel();
+            pauseRequestedRef.current = false;
           }
         };
         u.onend = () => {
@@ -889,34 +896,33 @@ export default function App() {
     const p = phaseRef.current;
 
     if (p === "speaking") {
-      // PAUSA
+      // PAUSA: solicitamos pause pero esperamos el boundary de palabra natural
+      // antes de cancelar, para que la palabra en curso se escuche completa.
       userPausedRef.current = true;
       isCancelingRef.current = true; // onend NO avanza al chunk siguiente
 
-      // Guardamos posición mid-chunk usando onboundary.
-      // Si no hay boundary (ej. Android), usamos tiempo transcurrido como fallback.
-      let savedPos: number | null = null;
-      if (synth.speaking && partCharIndexRef.current > 0) {
-        savedPos = partCharIndexRef.current;
-      } else if (synth.speaking && speakStartTsRef.current > 0) {
-        // Fallback: estimar posición basado en tiempo transcurrido desde onstart.
-        // En español ~13 caracteres por segundo a rate=0.5.
-        const elapsed = Date.now() - speakStartTsRef.current;
-        const estimatedPos = Math.floor(elapsed / 1000 * 13);
-        const partText = textPartsRef.current[partIndexRef.current];
-        if (partText) {
-          savedPos = Math.min(partText.length, Math.max(0, estimatedPos));
-        }
-      }
-      savedCharIndexRef.current = savedPos;
+      // Flags para coordinar pause con onboundary
+      pauseRequestedRef.current = true;
 
-      try {
-        synth.cancel();
-      } catch {
-        /* no-op */
-      }
+      // NO cancelamos de inmediato: esperaremos el próximo onboundary
+      // para cortar justo después de terminar la palabra actual.
       goPhase("voicePaused");
       setStatus("Lectura en pausa");
+
+      // Fallback por si onboundary no dispara (últimas muy cortas).
+      // Cancelamos después de 2s como máximo para no quedarnos colgados.
+      const pauseTimeout = setTimeout(() => {
+        if (pauseRequestedRef.current) {
+          pauseRequestedRef.current = false;
+          try {
+            synth.cancel();
+          } catch {
+            /* no-op */
+          }
+        }
+      }, 2000);
+      // Limpiamos el timeout si onboundary cancela antes.
+      // Se hará en el propio onboundary al setear pauseRequestedRef = false.
     } else if (p === "voicePaused") {
       // RESUME
       const savedIdx = savedCharIndexRef.current;
